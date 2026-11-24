@@ -2,12 +2,26 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from takt.core.models import Task, CheckList, Habit, Note, new_list_item, now_utc
 from takt.core.store import Store
 from takt.core import habits as habits_core
 from takt.core import lists as lists_core
 from takt.transfer import build_payload
+
+
+def texts(control):
+    out = []
+    value = getattr(control, "value", None)
+    if isinstance(value, str):
+        out.append(value)
+    for child in getattr(control, "controls", []) or []:
+        out.extend(texts(child))
+    content = getattr(control, "content", None)
+    if content is not None:
+        out.extend(texts(content))
+    return out
 
 
 class FakePage:
@@ -22,6 +36,7 @@ class FakePage:
         self.controls = []
         self.services = []
         self.width = 500
+        self.window = SimpleNamespace(icon=None)
 
     def add(self, *controls):
         self.controls.extend(controls)
@@ -138,12 +153,54 @@ class ViewsSmokeTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_sections_build(self):
-        from takt.ui import lists_view, habits_view, notes_view, stats_view, calendar_view
+        from takt.ui import (lists_view, habits_view, notes_view, stats_view,
+                             calendar_view, dashboard_view)
         for builder in (lists_view.build, habits_view.build, notes_view.build,
-                        stats_view.build, calendar_view.build_full):
+                        stats_view.build, calendar_view.build_full,
+                        dashboard_view.build):
             control = builder(self.app)
             self.assertIsNotNone(control)
         self.assertIsNotNone(calendar_view.mini(self.app))
+
+    def test_dashboard_shows_overdue_and_upcoming(self):
+        from takt.ui import dashboard_view
+        self.store.complete_task(self.store.list_tasks()[0].id)
+        past = (now_utc() - timedelta(days=2)).isoformat()
+        future = (now_utc() + timedelta(days=1)).isoformat()
+        self.store.save_task(Task(title="Просроченная", due_at=past))
+        self.store.save_task(Task(title="Завтрашняя", due_at=future))
+        self.store.save_task(Task(title="Без срока"))
+        found = texts(dashboard_view.build(self.app))
+        self.assertTrue(any("Просрочено: 1" in t for t in found))
+        self.assertTrue(any("Просроченная" in t for t in found))
+        self.assertTrue(any("Завтрашняя" in t for t in found))
+        self.assertTrue(any("Без срока" in t for t in found))
+        self.assertTrue(any("Ближайшие задачи" in t for t in found))
+
+    def test_mobile_nav_labels_fit(self):
+        import flet as ft
+        self.app.page.width = 500
+        self.app._build_nav()
+        self.assertEqual(self.app.nav.label_behavior,
+                         ft.NavigationBarLabelBehavior.ALWAYS_HIDE)
+        self.app.page.width = 700
+        self.app._build_nav()
+        self.assertEqual(self.app.nav.label_behavior,
+                         ft.NavigationBarLabelBehavior.ALWAYS_SHOW)
+        self.app.page.width = 1200
+        self.app._build_nav()
+        self.assertIsNone(self.app.page.navigation_bar)
+
+    def test_tasks_wide_calendar_sidebar(self):
+        import flet as ft
+        self.app.page.width = 1200
+        self.app.show_section("tasks")
+        row = self.app.content.controls[0]
+        self.assertIsInstance(row, ft.Row)
+        self.assertEqual(row.controls[1].width, 320)
+        self.app.page.width = 500
+        self.app.show_section("tasks")
+        self.assertIs(self.app.content.controls[0], self.app.mini_holder)
 
     def test_stats_summary(self):
         from takt.ui import stats_view
@@ -169,19 +226,6 @@ class ViewsSmokeTest(unittest.TestCase):
 
     def test_notes_search(self):
         from takt.ui import notes_view
-
-        def texts(control):
-            out = []
-            value = getattr(control, "value", None)
-            if isinstance(value, str):
-                out.append(value)
-            for child in getattr(control, "controls", []) or []:
-                out.extend(texts(child))
-            content = getattr(control, "content", None)
-            if content is not None:
-                out.extend(texts(content))
-            return out
-
         self.app.notes_search = "заметк"
         self.assertTrue(any("Заметка" in t for t in texts(notes_view.build(self.app))))
         self.app.notes_search = "нет такого"

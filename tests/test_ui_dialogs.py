@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 from takt.core.models import Task
@@ -17,6 +18,7 @@ class FakePage:
         self.floating_action_button = None
         self.services = []
         self.dialogs = []
+        self.window = SimpleNamespace(icon=None)
 
     def add(self, *c):
         pass

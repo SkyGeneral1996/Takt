@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from types import SimpleNamespace
 from datetime import timedelta
 from pathlib import Path
 
@@ -16,6 +17,7 @@ class FakePage:
         self.appbar = None
         self.floating_action_button = None
         self.controls = []
+        self.window = SimpleNamespace(icon=None)
 
     def add(self, *controls):
         self.controls.extend(controls)

@@ -1,9 +1,9 @@
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from takt.core.models import Task, Category, Recurrence, now_iso, parse_iso
+from takt.core.models import Task, Category, Recurrence, now_iso, now_utc, parse_iso
 from takt.core.recurrence import next_after
 from takt.core.store import Store
 
@@ -76,14 +76,16 @@ class TestStore(unittest.TestCase):
         self.assertEqual(len(self.store.completions_for(t.id)), 1)
 
     def test_complete_recurring_advances(self):
+        base = now_utc() - timedelta(days=1)
         t = self.store.save_task(Task(
             title="Зарядка",
-            due_at=dt(2026, 11, 23).isoformat(),
+            due_at=base.isoformat(),
             recurrence=Recurrence("daily").to_dict(),
             subtasks=[{"id": "s1", "title": "разминка", "done": True}]))
         nxt = self.store.complete_task(t.id)
         self.assertFalse(nxt.completed)
-        self.assertEqual(parse_iso(nxt.due_at).date(), dt(2026, 11, 24).date())
+        self.assertEqual(parse_iso(nxt.due_at).date(),
+                         (now_utc() + timedelta(days=1)).date())
         self.assertFalse(nxt.subtasks[0]["done"])
         self.assertEqual(len(self.store.completions_for(t.id)), 1)
 

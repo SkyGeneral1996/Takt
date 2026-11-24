@@ -17,7 +17,7 @@ import zipfile
 from pathlib import Path
 
 APP_NAME = "Takt"
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 EXE_NAME = "Takt.exe"
 UNINST_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Takt"
 

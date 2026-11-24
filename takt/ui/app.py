@@ -15,11 +15,13 @@ from .editor import open_task_editor
 from .helpers import PRIORITY_COLORS, fmt_due, is_overdue, is_today
 from .settings import open_settings, check_updates_silent
 from . import calendar_view, lists_view, habits_view, notes_view, stats_view
+from . import dashboard_view
 
 FILTERS = [("all", "Все"), ("today", "Сегодня"), ("overdue", "Просроченные"),
            ("done", "Выполненные")]
 
 SECTIONS = [
+    ("dashboard", "Обзор", ft.Icons.SPACE_DASHBOARD),
     ("tasks", "Задачи", ft.Icons.CHECKLIST),
     ("lists", "Списки", ft.Icons.LIST_ALT),
     ("calendar", "Календарь", ft.Icons.CALENDAR_MONTH),
@@ -45,7 +47,7 @@ class TaktApp:
         self.filter = "all"
         self.search = ""
         self.category_filter = ""
-        self.section = "tasks"
+        self.section = "dashboard"
         self.day_filter: str | None = None
         self.notes_search = ""
 
@@ -54,6 +56,9 @@ class TaktApp:
         page.theme_mode = (ft.ThemeMode.DARK
                            if store.get_meta("theme") == "dark" else ft.ThemeMode.LIGHT)
         page.padding = 12
+        icon_path = Path(__file__).resolve().parents[2] / "assets" / "icon.png"
+        if icon_path.exists():
+            page.window.icon = str(icon_path)
 
         self.search_f = ft.TextField(
             hint_text="Поиск по названию, заметкам, тегам…",
@@ -90,7 +95,7 @@ class TaktApp:
         self.root = ft.Container(content=self.content, expand=True)
         page.controls = [self.root]
         page.on_resized = lambda e: (self._build_nav(), page.update())
-        self.show_section("tasks")
+        self.show_section("dashboard")
 
         self.scheduler = ReminderScheduler(store, self.on_reminder)
         self.scheduler.start()
@@ -158,8 +163,12 @@ class TaktApp:
                 [self.nav, ft.VerticalDivider(width=1), self.content],
                 expand=True, spacing=0)
         else:
+            # 7 разделов: на узких экранах подписи не помещаются в ячейки
+            # (даже одна выбранная), поэтому там только иконки (Material 3)
+            behavior = (ft.NavigationBarLabelBehavior.ALWAYS_SHOW if width >= 640
+                        else ft.NavigationBarLabelBehavior.ALWAYS_HIDE)
             self.nav = ft.NavigationBar(
-                selected_index=idx,
+                selected_index=idx, label_behavior=behavior,
                 destinations=[ft.NavigationBarDestination(icon=ic, label=lb)
                               for _, lb, ic in SECTIONS],
                 on_change=self._on_nav)
@@ -168,6 +177,7 @@ class TaktApp:
 
     def _update_fab(self):
         fab = {
+            "dashboard": ("Новая задача", lambda e: open_task_editor(self)),
             "tasks": ("Новая задача", lambda e: open_task_editor(self)),
             "lists": ("Новый список", lambda e: lists_view.open_list_editor(self)),
             "habits": ("Новая привычка", lambda e: habits_view.open_habit_editor(self)),
@@ -179,16 +189,24 @@ class TaktApp:
     def render(self):
         if self.section == "tasks":
             self.mini_holder = ft.Container()
-            self.content.controls = [
-                self.mini_holder,
+            main = ft.Column([
                 ft.Row([self.search_f]),
                 ft.Row([self.filter_row, self.cat_dd],
                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                 self.empty_t, self.list_col,
-            ]
+            ], spacing=8, expand=True)
+            width = getattr(self.page, "width", None) or 0
+            if width >= 900:
+                self.content.controls = [ft.Row(
+                    [main, ft.Container(width=320, content=self.mini_holder)],
+                    spacing=10, expand=True,
+                    vertical_alignment=ft.CrossAxisAlignment.START)]
+            else:
+                self.content.controls = [self.mini_holder, main]
             self.refresh_tasks()
         else:
-            builder = {"lists": lists_view.build, "calendar": calendar_view.build_full,
+            builder = {"dashboard": dashboard_view.build,
+                       "lists": lists_view.build, "calendar": calendar_view.build_full,
                        "habits": habits_view.build, "notes": notes_view.build,
                        "stats": stats_view.build}[self.section]
             self.content.controls = [builder(self)]

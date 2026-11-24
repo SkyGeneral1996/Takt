@@ -1,6 +1,6 @@
 [project]
 name = "takt"
-version = "0.3.0"
+version = "0.3.1"
 description = "Takt — кроссплатформенный менеджер задач с синхронизацией через Яндекс.Диск"
 requires-python = ">=3.10"
 dependencies = [
