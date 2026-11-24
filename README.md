@@ -119,15 +119,20 @@ python -m venv .venv
 
 ## Сборка под Android
 
-Требуется Flutter SDK и Android SDK:
+Нужны JDK 17 и Android SDK (platform 36, build-tools 36). Flutter SDK нужной версии
+flet скачивает сам при первой сборке (`--yes` — без интерактивных вопросов):
 
 ```bash
 .venv/Scripts/pip install flet[all]
-.venv/Scripts/flet build apk
+.venv/Scripts/flet build apk --yes
+# компактный вариант только для современных телефонов (arm64):
+.venv/Scripts/flet build apk --yes --arch arm64-v8a
 ```
 
-APK в `build/apk`. Ограничения: напоминания пока приложение запущено; встроенного
-сканера QR нет — используйте камеру телефона + «Принять из файла/по ссылке».
+APK в `build/apk`. Данные на Android живут в каталоге приложения
+(`FLET_APP_STORAGE_DATA`), а не в `~/.takt`. Ограничения: напоминания пока приложение
+запущено; встроенного сканера QR нет — используйте камеру телефона + «Принять из
+файла/по ссылке»; обновления из GitHub на Android отключены (APK ставится вручную).
 
 ## План развития
 

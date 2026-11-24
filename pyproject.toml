@@ -15,6 +15,3 @@ org = "com.takt"
 
 [tool.flet.app]
 module = "main"
-
-[tool.flet.android]
-package = "com.takt.app"
