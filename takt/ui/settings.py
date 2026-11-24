@@ -16,6 +16,8 @@ from ..transfer import (
 )
 from ..update import (
     check_update, choose_asset, download_asset, launch_update, UpdateError, is_frozen,
+    is_android, android_assets, zip_native_stamp, native_stamp,
+    apply_code_update, restart_android, install_apk_android, android_restart_mode,
 )
 
 DEFAULT_REPO = "SkyGeneral1996/Takt"
@@ -45,9 +47,10 @@ def open_settings(app) -> None:
 
     repo_f = ft.TextField(label="GitHub-репозиторий (owner/name)",
                           value=store.get_meta("github_repo", DEFAULT_REPO),
-                          hint_text="например: SkyGeneral1996/Takt")
-    auto_cb = ft.Checkbox(label="Проверять обновления при запуске",
-                          value=store.get_meta("auto_update") == "1")
+                          hint_text="owner/name или URL сервера обновлений")
+    auto_cb = ft.Checkbox(value=store.get_meta("auto_update") == "1")
+    auto_row = ft.Row([auto_cb, ft.Text("Проверять обновления при запуске",
+                                        size=13, expand=True)], spacing=4)
     upd_status = ft.Text("", size=12)
 
     def save_settings(e=None):
@@ -85,10 +88,6 @@ def open_settings(app) -> None:
 
     def do_check_updates(e):
         save_settings()
-        if os.environ.get("ANDROID_ROOT"):
-            upd_status.value = "На Android обновление устанавливается вручную (APK)"
-            page.update()
-            return
         repo = store.get_meta("github_repo", DEFAULT_REPO)
         if not repo:
             upd_status.value = "Укажите репозиторий после его создания на GitHub"
@@ -139,11 +138,11 @@ def open_settings(app) -> None:
                                       on_click=lambda e: open_send(app)),
                     ft.OutlinedButton("Принять", icon=ft.Icons.DOWNLOAD,
                                       on_click=lambda e: open_receive(app)),
-                ]),
+                ], wrap=True, spacing=8),
                 ft.Divider(),
                 ft.Text("Обновления", weight=ft.FontWeight.BOLD),
                 ft.Text(f"Версия: {__version__}", size=12, color=ft.Colors.GREY),
-                repo_f, auto_cb, upd_status,
+                repo_f, auto_row, upd_status,
                 ft.Row([
                     ft.OutlinedButton("Проверить обновления", icon=ft.Icons.SYSTEM_UPDATE,
                                       on_click=do_check_updates),
@@ -313,27 +312,73 @@ def _show_diff(app, payload: dict) -> None:
     page.show_dialog(dialog)
 
 
+def _update_android(info, status_t, page) -> None:
+    code, apk = android_assets(info.assets)
+    tmp = Path(tempfile.mkdtemp(prefix="takt-update-"))
+
+    def prog(frac):
+        status_t.value = f"Загрузка… {int(frac * 100)}%"
+        page.update()
+
+    if code:
+        status_t.value = "Загрузка обновления…"
+        page.update()
+        dest = tmp / code["name"]
+        download_asset(code["url"], dest, prog)
+        if zip_native_stamp(dest) == native_stamp():
+            status_t.value = "Установка обновления…"
+            page.update()
+            apply_code_update(dest)
+            mode = android_restart_mode()
+            if mode == "notification":
+                status_t.value = "Обновление установлено ✓ Нажмите уведомление для перезапуска."
+            elif mode == "manual":
+                status_t.value = "Обновление установлено ✓ Закройте и откройте приложение снова."
+            else:
+                status_t.value = "Обновление установлено ✓ Перезапуск…"
+            page.update()
+            if mode == "manual":
+                time.sleep(2.5)
+            restart_android()
+            return
+    if apk:
+        status_t.value = "Загрузка APK (обновилась нативная часть)…"
+        page.update()
+        cache = Path(os.environ.get("FLET_APP_STORAGE_CACHE", str(tmp)))
+        dest = cache / apk["name"]
+        download_asset(apk["url"], dest, prog)
+        status_t.value = "Подтвердите установку в системном окне"
+        page.update()
+        install_apk_android(dest)
+        return
+    raise UpdateError("В релизе нет файлов для Android")
+
+
 def _show_update_dialog(app, info) -> None:
     page = app.page
     progress = ft.ProgressRing(visible=False, width=20, height=20)
-    status_t = ft.Text("", size=12)
+    status_t = ft.Text("", size=12, expand=True)
     state = {"busy": False}
 
     def do_update(e):
         if state["busy"]:
             return
-        asset = choose_asset(info.assets)
-        if not asset:
-            status_t.value = "В релизе нет файлов для Windows (.exe / .zip)"
-            page.update()
-            return
         state["busy"] = True
         progress.visible = True
-        status_t.value = f"Загрузка {asset['name']}…"
         page.update()
 
         def worker():
             try:
+                if is_android():
+                    _update_android(info, status_t, page)
+                    return
+                asset = choose_asset(info.assets)
+                if not asset:
+                    status_t.value = "В релизе нет файлов для Windows (.exe / .zip)"
+                    page.update()
+                    return
+                status_t.value = f"Загрузка {asset['name']}…"
+                page.update()
                 dest = Path(tempfile.mkdtemp(prefix="takt-update-")) / asset["name"]
 
                 def prog(frac):
@@ -376,8 +421,6 @@ def _show_update_dialog(app, info) -> None:
 
 
 def check_updates_silent(app) -> None:
-    if os.environ.get("ANDROID_ROOT"):
-        return
     repo = app.store.get_meta("github_repo", DEFAULT_REPO)
     if not repo or app.store.get_meta("auto_update") != "1":
         return

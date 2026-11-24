@@ -11,6 +11,7 @@ from ..core.recurrence import describe, Recurrence
 from ..core.scheduler import ReminderScheduler
 from ..core.store import Store
 from ..sync import YandexDiskProvider, SyncEngine
+from ..update import is_android, ensure_notification_permission
 from .editor import open_task_editor
 from .helpers import PRIORITY_COLORS, fmt_due, is_overdue, is_today
 from .settings import open_settings, check_updates_silent
@@ -102,6 +103,9 @@ class TaktApp:
         self.refresh()
         if store.get_meta("yandex_token"):
             threading.Thread(target=self._sync_worker, daemon=True).start()
+        if is_android() and store.get_meta("notif_perm_asked") != "1":
+            store.set_meta("notif_perm_asked", "1")
+            ensure_notification_permission()
         check_updates_silent(self)
 
     # ---------- уведомления ----------
