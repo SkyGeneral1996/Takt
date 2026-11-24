@@ -17,6 +17,8 @@ from ..update import (
     check_update, choose_asset, download_asset, launch_update, UpdateError, is_frozen,
 )
 
+DEFAULT_REPO = "SkyGeneral1996/Takt"
+
 
 def open_settings(app) -> None:
     store = app.store
@@ -41,8 +43,8 @@ def open_settings(app) -> None:
     sync_status = ft.Text("", size=12)
 
     repo_f = ft.TextField(label="GitHub-репозиторий (owner/name)",
-                          value=store.get_meta("github_repo", ""),
-                          hint_text="например: stepa/takt")
+                          value=store.get_meta("github_repo", DEFAULT_REPO),
+                          hint_text="например: SkyGeneral1996/Takt")
     auto_cb = ft.Checkbox(label="Проверять обновления при запуске",
                           value=store.get_meta("auto_update") == "1")
     upd_status = ft.Text("", size=12)
@@ -82,7 +84,7 @@ def open_settings(app) -> None:
 
     def do_check_updates(e):
         save_settings()
-        repo = store.get_meta("github_repo", "")
+        repo = store.get_meta("github_repo", DEFAULT_REPO)
         if not repo:
             upd_status.value = "Укажите репозиторий после его создания на GitHub"
             page.update()
@@ -369,7 +371,7 @@ def _show_update_dialog(app, info) -> None:
 
 
 def check_updates_silent(app) -> None:
-    repo = app.store.get_meta("github_repo", "")
+    repo = app.store.get_meta("github_repo", DEFAULT_REPO)
     if not repo or app.store.get_meta("auto_update") != "1":
         return
 
