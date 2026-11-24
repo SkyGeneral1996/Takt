@@ -124,10 +124,13 @@ flet скачивает сам при первой сборке (`--yes` — б�
 
 ```bash
 .venv/Scripts/pip install flet[all]
-.venv/Scripts/flet build apk --yes
+.venv/Scripts/flet build apk --yes --exclude dist
 # компактный вариант только для современных телефонов (arm64):
-.venv/Scripts/flet build apk --yes --arch arm64-v8a
+.venv/Scripts/flet build apk --yes --arch arm64-v8a --exclude dist
 ```
+
+`--exclude dist` обязателен, если в проекте есть Windows-сборки: иначе они
+попадают внутрь APK и раздувают его на сотни мегабайт.
 
 APK в `build/apk`. Данные на Android живут в каталоге приложения
 (`FLET_APP_STORAGE_DATA`), а не в `~/.takt`. Ограничения: напоминания пока приложение
