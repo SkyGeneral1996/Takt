@@ -29,7 +29,7 @@ def main():
     STAGE.mkdir(exist_ok=True)
 
     run(FLET, "pack", "main.py", "-n", "Takt", "-D", "--distpath", DIST,
-        "--product-name", "Takt", "--product-version", "0.2.0", "-y")
+        "--product-name", "Takt", "--product-version", "0.3.0", "-y")
 
     app_zip = STAGE / "app.zip"
     with zipfile.ZipFile(app_zip, "w", zipfile.ZIP_DEFLATED) as z:
@@ -41,12 +41,12 @@ def main():
 
     run(FLET, "pack", "installer.py", "-n", "Takt-Setup", "--distpath", DIST,
         "--add-data", f"{app_zip};.",
-        "--product-name", "Takt Setup", "--product-version", "0.2.0", "-y",
+        "--product-name", "Takt Setup", "--product-version", "0.3.0", "-y",
         "--pyinstaller-build-args=--noconsole")
     shutil.move(str(DIST / "Takt-Setup.exe"), str(STAGE / "Takt-Setup.exe"))
 
     run(FLET, "pack", "main.py", "-n", "Takt-Portable", "--distpath", DIST,
-        "--product-name", "Takt", "--product-version", "0.2.0", "-y")
+        "--product-name", "Takt", "--product-version", "0.3.0", "-y")
     shutil.move(str(DIST / "Takt-Portable.exe"), str(STAGE / "Takt-Portable.exe"))
 
     shutil.rmtree(DIST, ignore_errors=True)

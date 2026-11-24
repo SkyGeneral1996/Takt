@@ -153,9 +153,9 @@ def open_settings(app) -> None:
     page.show_dialog(dialog)
 
 
-def open_send(app) -> None:
+def open_send(app, payload: dict | None = None, title: str = "Передать данные") -> None:
     page = app.page
-    server = TransferServer(app.store)
+    server = TransferServer(app.store, payload=payload)
     server.start()
     state = {"closed": False}
 
@@ -183,7 +183,7 @@ def open_send(app) -> None:
 
     dialog = ft.AlertDialog(
         modal=True,
-        title=ft.Text("Передать данные"),
+        title=ft.Text(title),
         content=ft.Container(
             width=340,
             content=ft.Column([

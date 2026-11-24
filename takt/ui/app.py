@@ -14,9 +14,19 @@ from ..sync import YandexDiskProvider, SyncEngine
 from .editor import open_task_editor
 from .helpers import PRIORITY_COLORS, fmt_due, is_overdue, is_today
 from .settings import open_settings, check_updates_silent
+from . import calendar_view, lists_view, habits_view, notes_view, stats_view
 
 FILTERS = [("all", "Все"), ("today", "Сегодня"), ("overdue", "Просроченные"),
            ("done", "Выполненные")]
+
+SECTIONS = [
+    ("tasks", "Задачи", ft.Icons.CHECKLIST),
+    ("lists", "Списки", ft.Icons.LIST_ALT),
+    ("calendar", "Календарь", ft.Icons.CALENDAR_MONTH),
+    ("habits", "Привычки", ft.Icons.LOOP),
+    ("notes", "Заметки", ft.Icons.STICKY_NOTE_2),
+    ("stats", "Статистика", ft.Icons.BAR_CHART),
+]
 
 
 def data_home() -> Path:
@@ -32,6 +42,9 @@ class TaktApp:
         self.filter = "all"
         self.search = ""
         self.category_filter = ""
+        self.section = "tasks"
+        self.day_filter: str | None = None
+        self.notes_search = ""
 
         page.title = "Takt — задачи"
         page.theme = ft.Theme(color_scheme_seed=ft.Colors.INDIGO)
@@ -70,8 +83,11 @@ class TaktApp:
             icon=ft.Icons.ADD, tooltip="Новая задача",
             on_click=lambda e: open_task_editor(self))
 
-        page.add(ft.Row([self.search_f]), ft.Row([self.filter_row, self.cat_dd],
-                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN), self.empty_t, self.list_col)
+        self.content = ft.Column(spacing=8, expand=True)
+        self.root = ft.Container(content=self.content, expand=True)
+        page.controls = [self.root]
+        page.on_resized = lambda e: (self._build_nav(), page.update())
+        self.show_section("tasks")
 
         self.scheduler = ReminderScheduler(store, self.on_reminder)
         self.scheduler.start()
@@ -110,6 +126,70 @@ class TaktApp:
         self.store.set_meta("theme", "dark" if dark else "light")
         self.page.update()
 
+    # ---------- навигация ----------
+
+    def show_section(self, key: str):
+        self.section = key
+        label = next(lb for k, lb, _ in SECTIONS if k == key)
+        self.page.title = f"Takt — {label.lower()}"
+        self._update_fab()
+        self.render()
+        self._build_nav()
+        self.page.update()
+
+    def _on_nav(self, e):
+        self.show_section(SECTIONS[e.control.selected_index][0])
+
+    def _build_nav(self):
+        idx = next(i for i, (k, _, _) in enumerate(SECTIONS) if k == self.section)
+        width = getattr(self.page, "width", None) or 0
+        if width >= 900:
+            self.nav = ft.NavigationRail(
+                selected_index=idx, min_width=80,
+                label_type=ft.NavigationRailLabelType.ALL,
+                destinations=[ft.NavigationRailDestination(icon=ic, label=lb)
+                              for _, lb, ic in SECTIONS],
+                on_change=self._on_nav)
+            self.page.navigation_bar = None
+            self.root.content = ft.Row(
+                [self.nav, ft.VerticalDivider(width=1), self.content],
+                expand=True, spacing=0)
+        else:
+            self.nav = ft.NavigationBar(
+                selected_index=idx,
+                destinations=[ft.NavigationBarDestination(icon=ic, label=lb)
+                              for _, lb, ic in SECTIONS],
+                on_change=self._on_nav)
+            self.page.navigation_bar = self.nav
+            self.root.content = self.content
+
+    def _update_fab(self):
+        fab = {
+            "tasks": ("Новая задача", lambda e: open_task_editor(self)),
+            "lists": ("Новый список", lambda e: lists_view.open_list_editor(self)),
+            "habits": ("Новая привычка", lambda e: habits_view.open_habit_editor(self)),
+            "notes": ("Новая заметка", lambda e: notes_view.open_note_editor(self)),
+        }.get(self.section)
+        self.page.floating_action_button = ft.FloatingActionButton(
+            icon=ft.Icons.ADD, tooltip=fab[0], on_click=fab[1]) if fab else None
+
+    def render(self):
+        if self.section == "tasks":
+            self.mini_holder = ft.Container()
+            self.content.controls = [
+                self.mini_holder,
+                ft.Row([self.search_f]),
+                ft.Row([self.filter_row, self.cat_dd],
+                       alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                self.empty_t, self.list_col,
+            ]
+            self.refresh_tasks()
+        else:
+            builder = {"lists": lists_view.build, "calendar": calendar_view.build_full,
+                       "habits": habits_view.build, "notes": notes_view.build,
+                       "stats": stats_view.build}[self.section]
+            self.content.controls = [builder(self)]
+
     # ---------- синхронизация ----------
 
     def sync_now(self):
@@ -145,6 +225,9 @@ class TaktApp:
             tasks = [t for t in tasks if not t.completed]
         if self.category_filter:
             tasks = [t for t in tasks if t.category_id == self.category_filter]
+        if self.day_filter:
+            tasks = [t for t in tasks if t.due_at
+                     and calendar_view.due_local_date(t.due_at) == self.day_filter]
         if self.search:
             def match(t: Task) -> bool:
                 hay = " ".join([t.title, t.notes, " ".join(t.tags)]).lower()
@@ -155,6 +238,14 @@ class TaktApp:
         return tasks
 
     def refresh(self):
+        if self.section == "tasks":
+            self.refresh_tasks()
+        else:
+            self.render()
+        self.page.update()
+
+    def refresh_tasks(self):
+        self.mini_holder.content = calendar_view.mini(self)
         self.filter_row.controls = [
             ft.TextButton(
                 content=label,
@@ -171,10 +262,13 @@ class TaktApp:
         self.cat_dd.value = self.category_filter
 
         cat_names = {c.id: c for c in cats}
+        self.lists_by_task: dict[str, list] = {}
+        for lst in self.store.list_lists():
+            if lst.task_id:
+                self.lists_by_task.setdefault(lst.task_id, []).append(lst)
         tasks = self.visible_tasks()
         self.list_col.controls = [self.task_card(t, cat_names) for t in tasks]
         self.empty_t.value = "" if tasks else "Нет задач. Нажмите +, чтобы создать."
-        self.page.update()
 
     def task_card(self, t: Task, cat_names: dict) -> ft.Control:
         meta: list[ft.Control] = []
@@ -199,6 +293,10 @@ class TaktApp:
             done = sum(1 for s in t.subtasks if s.get("done"))
             meta.append(ft.Text(f"Подзадачи: {done}/{len(t.subtasks)}",
                                 size=12, color=ft.Colors.GREY))
+        for lst in getattr(self, "lists_by_task", {}).get(t.id, []):
+            done, total = lst.progress
+            meta.append(ft.Text(f"Список «{lst.name}»: {done}/{total}",
+                                size=12, color=ft.Colors.INDIGO_300))
 
         def on_check(e, task=t):
             if e.control.value:

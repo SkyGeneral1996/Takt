@@ -92,3 +92,92 @@ class Category:
 
     def touch(self) -> None:
         self.updated_at = now_iso()
+
+
+def new_list_item(text: str = "", qty: float = 1, unit: str = "",
+                  price: float | None = None, group: str = "",
+                  position: int = 0) -> dict:
+    return {"id": new_id(), "text": text, "done": False, "qty": qty,
+            "unit": unit, "price": price, "group": group, "position": position}
+
+
+@dataclass
+class CheckList:
+    id: str = field(default_factory=new_id)
+    name: str = ""
+    items: list[dict] = field(default_factory=list)  # ListItem.to_dict()
+    task_id: str | None = None
+    recurrence: dict | None = None     # Recurrence.to_dict() — повторяемый список
+    cycles: int = 0                    # сколько раз список обновляли
+    created_at: str = field(default_factory=now_iso)
+    updated_at: str = field(default_factory=now_iso)
+    deleted: bool = False
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CheckList":
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+    def touch(self) -> None:
+        self.updated_at = now_iso()
+
+    @property
+    def progress(self) -> tuple[int, int]:
+        return sum(1 for i in self.items if i.get("done")), len(self.items)
+
+    @property
+    def total(self) -> float:
+        return sum((i.get("qty") or 1) * (i.get("price") or 0) for i in self.items)
+
+
+@dataclass
+class Habit:
+    id: str = field(default_factory=new_id)
+    name: str = ""
+    color: str = "#4CAF50"
+    freq: str = "daily"                # daily | weekdays
+    weekdays: list[int] = field(default_factory=list)  # 0 = понедельник
+    checks: dict = field(default_factory=dict)         # "YYYY-MM-DD" (локальная дата) -> True
+    created_at: str = field(default_factory=now_iso)
+    updated_at: str = field(default_factory=now_iso)
+    deleted: bool = False
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Habit":
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+    def touch(self) -> None:
+        self.updated_at = now_iso()
+
+    def scheduled_on(self, weekday: int) -> bool:
+        return self.freq == "daily" or weekday in self.weekdays
+
+
+@dataclass
+class Note:
+    id: str = field(default_factory=new_id)
+    title: str = ""
+    text: str = ""
+    tags: list[str] = field(default_factory=list)
+    pinned: bool = False
+    created_at: str = field(default_factory=now_iso)
+    updated_at: str = field(default_factory=now_iso)
+    deleted: bool = False
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Note":
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+    def touch(self) -> None:
+        self.updated_at = now_iso()

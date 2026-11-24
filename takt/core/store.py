@@ -5,8 +5,12 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from .models import Task, Category, Recurrence, new_id, now_iso, parse_iso
+from .models import (Task, Category, Recurrence, CheckList, Habit, Note,
+                     new_id, now_iso, parse_iso)
 from .recurrence import next_after
+
+ENTITY_TABLES = {"task": "tasks", "category": "categories",
+                 "list": "lists", "habit": "habits", "note": "notes"}
 
 
 class Store:
@@ -32,6 +36,15 @@ class Store:
                 id TEXT PRIMARY KEY, data TEXT NOT NULL,
                 updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS categories(
+                id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS lists(
+                id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS habits(
+                id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS notes(
                 id TEXT PRIMARY KEY, data TEXT NOT NULL,
                 updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS completions(
@@ -106,7 +119,7 @@ class Store:
                 if self._conn.execute("SELECT 1 FROM applied WHERE event_id=?", (eid,)).fetchone():
                     continue
                 self._conn.execute("INSERT INTO applied(event_id) VALUES(?)", (eid,))
-                table = {"task": "tasks", "category": "categories"}.get(ev["entity"])
+                table = ENTITY_TABLES.get(ev["entity"])
                 if table is None:
                     continue
                 row = self._conn.execute(
@@ -237,11 +250,126 @@ class Store:
                 "SELECT at FROM completions WHERE task_id=? ORDER BY at", (task_id,)).fetchall()
         return [r["at"] for r in rows]
 
+    def completions_between(self, start_iso: str, end_iso: str) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT task_id, at FROM completions WHERE at>=? AND at<? ORDER BY at",
+                (start_iso, end_iso)).fetchall()
+        return [{"task_id": r["task_id"], "at": r["at"]} for r in rows]
+
+    # ---------- универсальные сущности (списки, привычки, заметки) ----------
+
+    def _save_entity(self, entity: str, obj) -> None:
+        table = ENTITY_TABLES[entity]
+        obj.touch()
+        self._conn.execute(
+            f"INSERT INTO {table}(id,data,updated_at,deleted) VALUES(?,?,?,?) "
+            f"ON CONFLICT(id) DO UPDATE SET data=excluded.data, "
+            f"updated_at=excluded.updated_at, deleted=excluded.deleted",
+            (obj.id, json.dumps(obj.to_dict(), ensure_ascii=False),
+             obj.updated_at, 1 if obj.deleted else 0))
+        self._append_change(entity, obj)
+        self._conn.commit()
+
+    def _get_entity(self, entity: str, entity_id: str, cls, include_deleted: bool = False):
+        table = ENTITY_TABLES[entity]
+        with self._lock:
+            q = f"SELECT data FROM {table} WHERE id=?"
+            if not include_deleted:
+                q += " AND deleted=0"
+            row = self._conn.execute(q, (entity_id,)).fetchone()
+        return cls.from_dict(json.loads(row["data"])) if row else None
+
+    def _list_entities(self, entity: str, cls) -> list:
+        table = ENTITY_TABLES[entity]
+        with self._lock:
+            rows = self._conn.execute(f"SELECT data FROM {table} WHERE deleted=0").fetchall()
+        return [cls.from_dict(json.loads(r["data"])) for r in rows]
+
+    def _delete_entity(self, entity: str, entity_id: str, cls) -> None:
+        obj = self._get_entity(entity, entity_id, cls, include_deleted=True)
+        if obj:
+            obj.deleted = True
+            with self._lock:
+                self._save_entity(entity, obj)
+
+    # ---------- списки ----------
+
+    def save_list(self, lst: CheckList) -> CheckList:
+        with self._lock:
+            self._save_entity("list", lst)
+            return lst
+
+    def delete_list(self, list_id: str) -> None:
+        self._delete_entity("list", list_id, CheckList)
+
+    def get_list(self, list_id: str) -> CheckList | None:
+        return self._get_entity("list", list_id, CheckList)
+
+    def list_lists(self) -> list[CheckList]:
+        return sorted(self._list_entities("list", CheckList),
+                      key=lambda l: l.updated_at, reverse=True)
+
+    def reset_list(self, list_id: str) -> CheckList | None:
+        """Новый цикл повторяемого списка: все позиции снова не отмечены."""
+        lst = self.get_list(list_id)
+        if not lst:
+            return None
+        for item in lst.items:
+            item["done"] = False
+        lst.cycles += 1
+        return self.save_list(lst)
+
+    # ---------- привычки ----------
+
+    def save_habit(self, habit: Habit) -> Habit:
+        with self._lock:
+            self._save_entity("habit", habit)
+            return habit
+
+    def delete_habit(self, habit_id: str) -> None:
+        self._delete_entity("habit", habit_id, Habit)
+
+    def get_habit(self, habit_id: str) -> Habit | None:
+        return self._get_entity("habit", habit_id, Habit)
+
+    def list_habits(self) -> list[Habit]:
+        return sorted(self._list_entities("habit", Habit), key=lambda h: h.created_at)
+
+    def check_habit(self, habit_id: str, day: str, done: bool = True) -> Habit | None:
+        habit = self.get_habit(habit_id)
+        if not habit:
+            return None
+        if done:
+            habit.checks[day] = True
+        else:
+            habit.checks.pop(day, None)
+        return self.save_habit(habit)
+
+    # ---------- заметки ----------
+
+    def save_note(self, note: Note) -> Note:
+        with self._lock:
+            self._save_entity("note", note)
+            return note
+
+    def delete_note(self, note_id: str) -> None:
+        self._delete_entity("note", note_id, Note)
+
+    def get_note(self, note_id: str) -> Note | None:
+        return self._get_entity("note", note_id, Note)
+
+    def list_notes(self) -> list[Note]:
+        notes = self._list_entities("note", Note)
+        notes.sort(key=lambda n: n.updated_at, reverse=True)
+        notes.sort(key=lambda n: not n.pinned)
+        return notes
+
     def export_state(self) -> list[dict]:
         """Полное текущее состояние сущностей (включая tombstone) для переноса."""
         with self._lock:
             out = []
-            for entity, table in (("task", "tasks"), ("category", "categories")):
+            for entity, table in ENTITY_TABLES.items():
                 for r in self._conn.execute(f"SELECT id,data,updated_at FROM {table}"):
                     out.append({"entity": entity, "entity_id": r["id"],
                                 "payload": json.loads(r["data"]),

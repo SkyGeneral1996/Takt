@@ -29,9 +29,11 @@ def lan_ip() -> str:
         s.close()
 
 
-def build_payload(store: Store) -> dict:
+def build_payload(store: Store, only: set | None = None) -> dict:
     events = []
     for row in store.export_state():
+        if only is not None and (row["entity"], row["entity_id"]) not in only:
+            continue
         eid = hashlib.sha1(
             f"{store.device_id}:{row['entity']}:{row['entity_id']}:{row['updated_at']}"
             .encode("utf-8")).hexdigest()
@@ -137,8 +139,9 @@ class TransferServer:
     """Временный HTTP-сервер в локальной сети: отдаёт payload по одноразовому
     токену. QR ведёт на страницу /t/<token>, данные — /data.json?token=."""
 
-    def __init__(self, store: Store, ttl_sec: float = 300.0):
-        self.payload_json = json.dumps(build_payload(store), ensure_ascii=False)
+    def __init__(self, store: Store, ttl_sec: float = 300.0, payload: dict | None = None):
+        self.payload_json = json.dumps(
+            payload if payload is not None else build_payload(store), ensure_ascii=False)
         self.token = secrets.token_urlsafe(12)
         self.received = threading.Event()
         server = self
