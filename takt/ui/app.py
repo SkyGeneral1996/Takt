@@ -30,7 +30,10 @@ SECTIONS = [
 
 
 def data_home() -> Path:
-    home = Path(os.environ.get("TAKT_HOME", str(Path.home() / ".takt")))
+    base = os.environ.get("TAKT_HOME")
+    if not base and os.environ.get("ANDROID_ROOT"):
+        base = os.environ.get("FLET_APP_STORAGE_DATA")
+    home = Path(base or str(Path.home() / ".takt"))
     home.mkdir(parents=True, exist_ok=True)
     return home
 

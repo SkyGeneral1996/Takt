@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import io
 import json
 import secrets
 import socket
+import struct
 import threading
+import zlib
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -115,10 +116,28 @@ def apply_payload(store: Store, payload: dict) -> int:
 
 
 def qr_png_base64(text: str) -> str:
-    img = qrcode.make(text)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("ascii")
+    # PNG без pillow/pypng:serious_python на Android их не собирает
+    qr = qrcode.QRCode(border=4)
+    qr.add_data(text)
+    qr.make(fit=True)
+    matrix = qr.get_matrix()
+    scale = 8
+    size = len(matrix) * scale
+    raw = bytearray()
+    for row in matrix:
+        line = b"".join(bytes([0 if v else 255]) * scale for v in row)
+        for _ in range(scale):
+            raw += b"\x00" + line
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 0, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+           + chunk(b"IEND", b""))
+    return base64.b64encode(png).decode("ascii")
 
 
 _PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">

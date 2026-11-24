@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import threading
 import time
@@ -84,6 +85,10 @@ def open_settings(app) -> None:
 
     def do_check_updates(e):
         save_settings()
+        if os.environ.get("ANDROID_ROOT"):
+            upd_status.value = "На Android обновление устанавливается вручную (APK)"
+            page.update()
+            return
         repo = store.get_meta("github_repo", DEFAULT_REPO)
         if not repo:
             upd_status.value = "Укажите репозиторий после его создания на GitHub"
@@ -371,6 +376,8 @@ def _show_update_dialog(app, info) -> None:
 
 
 def check_updates_silent(app) -> None:
+    if os.environ.get("ANDROID_ROOT"):
+        return
     repo = app.store.get_meta("github_repo", DEFAULT_REPO)
     if not repo or app.store.get_meta("auto_update") != "1":
         return

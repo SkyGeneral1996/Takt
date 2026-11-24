@@ -1,3 +1,5 @@
+import base64
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -66,7 +68,11 @@ class TestTransfer(unittest.TestCase):
 
     def test_qr_png(self):
         b64 = transfer.qr_png_base64("http://192.168.1.10:1234/t/abc")
-        self.assertTrue(len(b64) > 100)
+        raw = base64.b64decode(b64)
+        self.assertEqual(raw[:8], b"\x89PNG\r\n\x1a\n")
+        w, h = struct.unpack(">II", raw[16:24])
+        self.assertGreater(w, 100)
+        self.assertEqual(w, h)
 
     def test_server_roundtrip(self):
         self.a.save_task(Task(title="По сети"))
