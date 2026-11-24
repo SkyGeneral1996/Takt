@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 build/
 dist/
+release/
 *.db
 *.egg-info/
 .demo_data/

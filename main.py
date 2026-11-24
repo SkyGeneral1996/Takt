@@ -2,7 +2,7 @@ import sys
 
 import flet as ft
 
-from tasksync.ui.app import main
+from takt.ui.app import main
 
 if __name__ == "__main__":
     if "--web" in sys.argv:

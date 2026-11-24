@@ -3,9 +3,9 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tasksync.core.models import Task, Category, Recurrence, now_iso, parse_iso
-from tasksync.core.recurrence import next_after
-from tasksync.core.store import Store
+from takt.core.models import Task, Category, Recurrence, now_iso, parse_iso
+from takt.core.recurrence import next_after
+from takt.core.store import Store
 
 
 def dt(y, m, d, h=9):

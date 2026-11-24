@@ -236,3 +236,14 @@ class Store:
             rows = self._conn.execute(
                 "SELECT at FROM completions WHERE task_id=? ORDER BY at", (task_id,)).fetchall()
         return [r["at"] for r in rows]
+
+    def export_state(self) -> list[dict]:
+        """Полное текущее состояние сущностей (включая tombstone) для переноса."""
+        with self._lock:
+            out = []
+            for entity, table in (("task", "tasks"), ("category", "categories")):
+                for r in self._conn.execute(f"SELECT id,data,updated_at FROM {table}"):
+                    out.append({"entity": entity, "entity_id": r["id"],
+                                "payload": json.loads(r["data"]),
+                                "updated_at": r["updated_at"]})
+            return out

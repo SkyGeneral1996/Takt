@@ -13,19 +13,19 @@ from ..core.store import Store
 from ..sync import YandexDiskProvider, SyncEngine
 from .editor import open_task_editor
 from .helpers import PRIORITY_COLORS, fmt_due, is_overdue, is_today
-from .settings import open_settings
+from .settings import open_settings, check_updates_silent
 
 FILTERS = [("all", "Все"), ("today", "Сегодня"), ("overdue", "Просроченные"),
            ("done", "Выполненные")]
 
 
 def data_home() -> Path:
-    home = Path(os.environ.get("TASKSYNC_HOME", str(Path.home() / ".tasksync")))
+    home = Path(os.environ.get("TAKT_HOME", str(Path.home() / ".takt")))
     home.mkdir(parents=True, exist_ok=True)
     return home
 
 
-class TaskSyncApp:
+class TaktApp:
     def __init__(self, page: ft.Page, store: Store):
         self.page = page
         self.store = store
@@ -33,7 +33,7 @@ class TaskSyncApp:
         self.search = ""
         self.category_filter = ""
 
-        page.title = "TaskSync — задачи"
+        page.title = "Takt — задачи"
         page.theme = ft.Theme(color_scheme_seed=ft.Colors.INDIGO)
         page.theme_mode = (ft.ThemeMode.DARK
                            if store.get_meta("theme") == "dark" else ft.ThemeMode.LIGHT)
@@ -56,7 +56,7 @@ class TaskSyncApp:
             else ft.Icons.LIGHT_MODE,
             tooltip="Сменить тему", on_click=self.toggle_theme)
         page.appbar = ft.AppBar(
-            title=ft.Text("TaskSync", weight=ft.FontWeight.BOLD),
+            title=ft.Text("Takt", weight=ft.FontWeight.BOLD),
             center_title=False,
             actions=[
                 ft.IconButton(ft.Icons.SYNC, tooltip="Синхронизировать",
@@ -78,6 +78,7 @@ class TaskSyncApp:
         self.refresh()
         if store.get_meta("yandex_token"):
             threading.Thread(target=self._sync_worker, daemon=True).start()
+        check_updates_silent(self)
 
     # ---------- уведомления ----------
 
@@ -122,7 +123,7 @@ class TaskSyncApp:
         try:
             provider = YandexDiskProvider(self.store.get_meta("yandex_token", ""))
             engine = SyncEngine(self.store, provider,
-                                self.store.get_meta("sync_folder", "TaskSync"))
+                                self.store.get_meta("sync_folder", "Takt"))
             result = engine.sync()
             self.refresh()
             if result.applied:
@@ -230,5 +231,5 @@ class TaskSyncApp:
 
 
 def main(page: ft.Page):
-    store = Store(data_home() / "tasksync.db")
-    TaskSyncApp(page, store)
+    store = Store(data_home() / "takt.db")
+    TaktApp(page, store)

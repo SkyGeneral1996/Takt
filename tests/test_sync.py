@@ -2,9 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tasksync.core.models import Task
-from tasksync.core.store import Store
-from tasksync.sync.engine import SyncEngine
+from takt.core.models import Task
+from takt.core.store import Store
+from takt.sync.engine import SyncEngine
 
 
 class FakeCloud:

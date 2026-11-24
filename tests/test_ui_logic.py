@@ -3,8 +3,8 @@ import unittest
 from datetime import timedelta
 from pathlib import Path
 
-from tasksync.core.models import Task, Category, now_utc
-from tasksync.core.store import Store
+from takt.core.models import Task, Category, now_utc
+from takt.core.store import Store
 
 
 class FakePage:
@@ -31,8 +31,8 @@ class TestUiLogic(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.store = Store(Path(self.tmp.name) / "ui.db", device_id="devU")
-        from tasksync.ui.app import TaskSyncApp
-        self.app = TaskSyncApp(FakePage(), self.store)
+        from takt.ui.app import TaktApp
+        self.app = TaktApp(FakePage(), self.store)
         self.app.scheduler.stop()
 
         now = now_utc()
