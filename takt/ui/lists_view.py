@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import flet as ft
 
 from ..core.lists import TEMPLATES, template_items, sorted_items, item_sum
@@ -7,6 +9,7 @@ from ..core.models import CheckList, new_list_item
 from ..core.recurrence import describe, Recurrence
 from ..transfer import build_payload
 from . import settings
+from .helpers import confirm_action, dialog_height, dialog_width
 
 
 def build(app) -> ft.Control:
@@ -60,7 +63,7 @@ def open_list_editor(app, lst: CheckList | None = None) -> None:
     tpl_dd = ft.Dropdown(label="Шаблон", dense=True, width=220,
                          options=[ft.DropdownOption(key="", text="Пустой список")] +
                          [ft.DropdownOption(key=k, text=k) for k in TEMPLATES])
-    tasks = store.list_tasks(include_completed=False)
+    tasks = store.list_tasks()
     task_dd = ft.Dropdown(label="Привязать к задаче", dense=True, width=220,
                           value=lst.task_id or "",
                           options=[ft.DropdownOption(key="", text="Без задачи")] +
@@ -84,11 +87,20 @@ def open_list_editor(app, lst: CheckList | None = None) -> None:
         rebuild_items()
 
     def apply_template(e):
-        if tpl_dd.value:
+        if not tpl_dd.value:
+            return
+
+        def replace():
             lst.items = template_items(tpl_dd.value)
             if not name_f.value:
                 name_f.value = tpl_dd.value
             rebuild_items()
+
+        if lst.items:
+            confirm_action(app, "Заменить текущие позиции выбранным шаблоном?",
+                           replace, title="Замена шаблона")
+        else:
+            replace()
 
     tpl_dd.on_select = apply_template
 
@@ -105,18 +117,23 @@ def open_list_editor(app, lst: CheckList | None = None) -> None:
         app.refresh()
 
     def delete(e):
-        store.delete_list(lst.id)
-        page.pop_dialog()
-        app.refresh()
+        def apply_delete():
+            store.delete_list(lst.id)
+            app.refresh()
+        confirm_action(app, f"Удалить список «{lst.name}»?", apply_delete,
+                       title="Удаление списка", parent=dialog)
 
     def reset(e):
-        store.reset_list(lst.id)
-        lst_new = store.get_list(lst.id)
-        lst.items = lst_new.items
-        lst.cycles = lst_new.cycles
-        rebuild_items()
-        app.notify("Список обновлён для нового цикла")
-        app.refresh()
+        def apply_reset():
+            store.reset_list(lst.id)
+            lst_new = store.get_list(lst.id)
+            lst.items = lst_new.items
+            lst.cycles = lst_new.cycles
+            rebuild_items()
+            app.notify("Список обновлён для нового цикла")
+            app.refresh()
+        confirm_action(app, "Сбросить отметки и начать новый цикл?",
+                       apply_reset, title="Новый цикл")
 
     def to_subtasks(e):
         task = store.get_task(lst.task_id) if lst.task_id else None
@@ -152,7 +169,8 @@ def open_list_editor(app, lst: CheckList | None = None) -> None:
         modal=True,
         title=ft.Text("Список" if editing else "Новый список"),
         content=ft.Container(
-            width=460,
+            width=dialog_width(page, 460),
+            height=dialog_height(page, 580),
             content=ft.Column([
                 name_f,
                 ft.Row([tpl_dd, task_dd], wrap=True, spacing=8),
@@ -161,7 +179,7 @@ def open_list_editor(app, lst: CheckList | None = None) -> None:
                 ft.Divider(height=8),
                 items_col,
                 ft.TextButton(content="+ Позиция", on_click=add_item),
-            ], scroll=ft.ScrollMode.AUTO, tight=True, spacing=8),
+            ], scroll=ft.ScrollMode.AUTO, tight=True, spacing=8, expand=True),
         ),
         actions=actions,
     )
@@ -171,7 +189,7 @@ def open_list_editor(app, lst: CheckList | None = None) -> None:
 def _item_row(app, lst: CheckList, it: dict, rebuild) -> ft.Control:
     text_f = ft.TextField(value=it.get("text", ""), dense=True, expand=True,
                           hint_text="Позиция")
-    qty_f = ft.TextField(value=str(it.get("qty") or 1), dense=True, width=55,
+    qty_f = ft.TextField(value=str(1 if it.get("qty") is None else it["qty"]), dense=True, width=55,
                          hint_text="кол-во")
     unit_f = ft.TextField(value=it.get("unit") or "", dense=True, width=55,
                           hint_text="ед.")
@@ -181,17 +199,21 @@ def _item_row(app, lst: CheckList, it: dict, rebuild) -> ft.Control:
                            hint_text="группа")
 
     def persist(e=None):
+        try:
+            qty = float((qty_f.value or "1").replace(",", "."))
+            price_text = (price_f.value or "").replace(",", ".").strip()
+            price = float(price_text) if price_text else None
+            if not math.isfinite(qty) or qty < 0:
+                raise ValueError
+            if price is not None and (not math.isfinite(price) or price < 0):
+                raise ValueError
+        except ValueError:
+            app.notify("Количество и цена должны быть конечными числами не меньше нуля")
+            return
         it["text"] = text_f.value or ""
-        try:
-            it["qty"] = float((qty_f.value or "1").replace(",", "."))
-        except ValueError:
-            it["qty"] = 1
+        it["qty"] = qty
         it["unit"] = unit_f.value or ""
-        try:
-            it["price"] = float((price_f.value or "").replace(",", ".")) \
-                if (price_f.value or "").strip() else None
-        except ValueError:
-            it["price"] = None
+        it["price"] = price
         it["group"] = group_f.value or ""
         app.store.save_list(lst)
         app.refresh()

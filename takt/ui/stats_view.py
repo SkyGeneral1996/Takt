@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import flet as ft
 
@@ -29,10 +29,11 @@ def _summary(app, days: int) -> dict:
 def _by_category(app, comps: list[dict]) -> list[tuple[str, str, int]]:
     store = app.store
     cats = {c.id: c for c in store.list_categories()}
+    tasks = store.tasks_by_ids(c["task_id"] for c in comps)
     counts: dict[str, int] = {}
     for c in comps:
-        t = store.get_task(c["task_id"], include_deleted=True)
-        key = t.category_id if t and t.category_id else ""
+        task = tasks.get(c["task_id"])
+        key = task.category_id if task and task.category_id else ""
         counts[key] = counts.get(key, 0) + 1
     out = []
     for key, n in sorted(counts.items(), key=lambda kv: -kv[1]):
@@ -48,7 +49,9 @@ def _heatmap(app) -> ft.Control:
     today = now_utc().astimezone().date()
     start = today - timedelta(days=today.weekday() + 7 * 11)
     end = now_utc().isoformat(timespec="milliseconds")
-    start_iso = parse_iso(start.isoformat()).isoformat(timespec="milliseconds")
+    local_zone = now_utc().astimezone().tzinfo
+    start_local = datetime.combine(start, datetime.min.time(), tzinfo=local_zone)
+    start_iso = start_local.astimezone(timezone.utc).isoformat(timespec="milliseconds")
     per_day: dict[str, int] = {}
     for c in store.completions_between(start_iso, end):
         d = parse_iso(c["at"]).astimezone().date().isoformat()
@@ -97,11 +100,12 @@ def build(app) -> ft.Control:
     if not by_cat:
         bars.append(ft.Text("Нет выполнений за период", color=ft.Colors.GREY, size=12))
     max_n = max((n for _, _, n in by_cat), default=1)
+    available = max(80, (app.page.width or 360) - 190)
     for name, color, n in by_cat:
         bars.append(ft.Row([
-            ft.Text(name, size=12, width=130, no_wrap=True,
+            ft.Text(name, size=12, width=110, no_wrap=True,
                     overflow=ft.TextOverflow.ELLIPSIS),
-            ft.Container(width=max(8, int(220 * n / max_n)), height=14,
+            ft.Container(width=max(8, int(available * n / max_n)), height=14,
                          border_radius=4, bgcolor=color),
             ft.Text(str(n), size=12),
         ], spacing=8))

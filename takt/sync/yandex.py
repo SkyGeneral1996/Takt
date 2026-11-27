@@ -3,6 +3,7 @@ from __future__ import annotations
 import requests
 
 API = "https://cloud-api.yandex.net/v1/disk"
+MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024
 
 
 class YandexDiskError(Exception):
@@ -24,7 +25,8 @@ class YandexDiskProvider:
     def _check(self, resp: requests.Response, ok: tuple[int, ...]) -> requests.Response:
         if resp.status_code not in ok:
             try:
-                detail = resp.json().get("message", resp.text[:200])
+                body = resp.json()
+                detail = body.get("message", resp.text[:200]) if isinstance(body, dict) else resp.text[:200]
             except ValueError:
                 detail = resp.text[:200]
             raise YandexDiskError(f"HTTP {resp.status_code}: {detail}")
@@ -40,15 +42,23 @@ class YandexDiskProvider:
                 self._check(resp, (201,))
 
     def list_files(self, folder: str) -> list[str]:
-        resp = self._session.get(
-            f"{API}/resources",
-            params={"path": folder, "limit": 1000, "fields": "_embedded.items.name,_embedded.items.type"},
-            timeout=self._timeout)
-        if resp.status_code == 404:
-            return []
-        self._check(resp, (200,))
-        items = resp.json().get("_embedded", {}).get("items", [])
-        return [it["name"] for it in items if it.get("type") == "file"]
+        names = []
+        offset = 0
+        for _ in range(100):
+            resp = self._session.get(
+                f"{API}/resources",
+                params={"path": folder, "limit": 1000, "offset": offset,
+                        "fields": "_embedded.items.name,_embedded.items.type"},
+                timeout=self._timeout)
+            if resp.status_code == 404:
+                return []
+            self._check(resp, (200,))
+            items = resp.json().get("_embedded", {}).get("items", [])
+            names.extend(it["name"] for it in items if it.get("type") == "file")
+            if len(items) < 1000:
+                break
+            offset += len(items)
+        return names
 
     def upload_text(self, remote_path: str, text: str) -> None:
         resp = self._session.get(
@@ -68,10 +78,24 @@ class YandexDiskProvider:
             return None
         self._check(resp, (200,))
         href = resp.json()["href"]
-        down = requests.get(href, timeout=self._timeout)
+        down = requests.get(href, stream=True, timeout=self._timeout)
         if down.status_code == 404:
             return None
         if down.status_code != 200:
             raise YandexDiskError(f"Скачивание не удалось: HTTP {down.status_code}")
-        down.encoding = "utf-8"
-        return down.text
+        length = down.headers.get("Content-Length")
+        if length and int(length) > MAX_DOWNLOAD_BYTES:
+            down.close()
+            raise YandexDiskError("Журнал превышает лимит размера")
+        data = bytearray()
+        try:
+            for chunk in down.iter_content(chunk_size=64 * 1024):
+                data.extend(chunk)
+                if len(data) > MAX_DOWNLOAD_BYTES:
+                    raise YandexDiskError("Журнал превышает лимит размера")
+        finally:
+            down.close()
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise YandexDiskError("Журнал имеет некорректную кодировку") from exc

@@ -3,13 +3,18 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import secrets
 import socket
 import struct
+import tempfile
 import threading
+import time
 import zlib
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 import qrcode
 import requests
@@ -17,17 +22,19 @@ import requests
 from .core.store import Store
 
 FORMAT = "takt-transfer-1"
+MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
+MAX_EVENTS = 100000
 
 
 def lan_ip() -> str:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
     except OSError:
         return "127.0.0.1"
     finally:
-        s.close()
+        sock.close()
 
 
 def build_payload(store: Store, only: set | None = None) -> dict:
@@ -35,13 +42,13 @@ def build_payload(store: Store, only: set | None = None) -> dict:
     for row in store.export_state():
         if only is not None and (row["entity"], row["entity_id"]) not in only:
             continue
-        eid = hashlib.sha1(
-            f"{store.device_id}:{row['entity']}:{row['entity_id']}:{row['updated_at']}"
-            .encode("utf-8")).hexdigest()
+        identity = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        event_id = hashlib.sha256(f"{store.device_id}:{identity}".encode("utf-8")).hexdigest()
         events.append({
-            "event_id": eid, "device_id": store.device_id,
+            "event_id": event_id, "device_id": store.device_id,
             "entity": row["entity"], "entity_id": row["entity_id"],
-            "op": "upsert", "payload": row["payload"], "updated_at": row["updated_at"],
+            "op": "delete" if row["payload"].get("deleted") else "upsert",
+            "payload": row["payload"], "updated_at": row["updated_at"],
         })
     return {"format": FORMAT, "device_id": store.device_id, "events": events}
 
@@ -49,20 +56,106 @@ def build_payload(store: Store, only: set | None = None) -> dict:
 def validate_payload(data: dict) -> dict:
     if not isinstance(data, dict) or data.get("format") != FORMAT:
         raise ValueError("Это не файл переноса Takt")
-    if not isinstance(data.get("events"), list):
-        raise ValueError("Повреждённый файл переноса")
-    return data
+    events = data.get("events")
+    if not isinstance(events, list) or len(events) > MAX_EVENTS:
+        raise ValueError("Повреждённый или слишком большой файл переноса")
+    if len(json.dumps(data, ensure_ascii=False).encode("utf-8")) > MAX_PAYLOAD_BYTES:
+        raise ValueError("Файл переноса превышает лимит размера")
+    normalized = []
+    seen = set()
+    for event in events:
+        item = Store.validate_event(event)
+        if item["event_id"] in seen:
+            raise ValueError("В файле есть повторяющиеся события")
+        seen.add(item["event_id"])
+        normalized.append(item)
+    result = dict(data)
+    result["events"] = normalized
+    return result
+
+
+def _validate_url(url: str) -> None:
+    if urlsplit(url).scheme not in {"http", "https"}:
+        raise ValueError("Недопустимая ссылка переноса")
 
 
 def fetch_payload(url: str, timeout: float = 15.0) -> dict:
-    resp = requests.get(url, timeout=timeout)
-    resp.raise_for_status()
-    return validate_payload(resp.json())
+    _validate_url(url)
+    deadline = time.monotonic() + timeout
+    for _ in range(6):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Превышено время загрузки")
+        response = requests.get(url, timeout=(min(5.0, remaining), remaining),
+                                stream=True, allow_redirects=False)
+        if response.status_code in {301, 302, 303, 307, 308}:
+            location = response.headers.get("Location")
+            response.close()
+            if not location:
+                raise ValueError("Некорректный редирект")
+            url = urljoin(url, location)
+            _validate_url(url)
+            continue
+        try:
+            response.raise_for_status()
+            length = response.headers.get("Content-Length")
+            if length:
+                try:
+                    declared = int(length)
+                except ValueError as exc:
+                    raise ValueError("Некорректный размер ответа") from exc
+                if declared > MAX_PAYLOAD_BYTES:
+                    raise ValueError("Файл переноса превышает лимит размера")
+            data = bytearray()
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                data.extend(chunk)
+                if len(data) > MAX_PAYLOAD_BYTES:
+                    raise ValueError("Файл переноса превышает лимит размера")
+                if time.monotonic() > deadline:
+                    raise TimeoutError("Превышено время загрузки")
+            try:
+                parsed = json.loads(data.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+                raise ValueError("Повреждённый файл переноса") from exc
+            return validate_payload(parsed)
+        finally:
+            response.close()
+    raise ValueError("Слишком много редиректов")
 
 
 def load_payload_file(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return validate_payload(json.load(f))
+    file_path = Path(path)
+    if file_path.stat().st_size > MAX_PAYLOAD_BYTES:
+        raise ValueError("Файл переноса превышает лимит размера")
+    with file_path.open("r", encoding="utf-8") as file:
+        try:
+            return validate_payload(json.load(file))
+        except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+            raise ValueError("Повреждённый файл переноса") from exc
+
+
+def save_payload_file(path: str | Path, payload: dict) -> Path:
+    destination = Path(path)
+    validated = validate_payload(payload)
+    data = json.dumps(validated, ensure_ascii=False, separators=(",", ":"),
+                      allow_nan=False).encode("utf-8")
+    if len(data) > MAX_PAYLOAD_BYTES:
+        raise ValueError("Файл переноса превышает лимит размера")
+    fd, temporary = tempfile.mkstemp(prefix=f".{destination.name}.",
+                                     suffix=".part", dir=destination.parent)
+    temp_path = Path(temporary)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temp_path, destination)
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+    return destination
 
 
 @dataclass
@@ -84,31 +177,16 @@ class DiffSummary:
 
 
 def diff_payload(store: Store, payload: dict) -> DiffSummary:
-    local = {(r["entity"], r["entity_id"]): r for r in store.export_state()}
-    s = DiffSummary()
-    for ev in payload["events"]:
-        key = (ev["entity"], ev["entity_id"])
-        incoming = ev["payload"]
-        title = incoming.get("name") or incoming.get("title") or ev["entity_id"][:8]
-        cur = local.get(key)
-        if cur is None or (cur["payload"].get("deleted") and not incoming.get("deleted")):
-            s.new += 1
-            action = "новая"
-        elif incoming.get("deleted") and not cur["payload"].get("deleted"):
-            s.deleted += 1
-            action = "удаление"
-        elif incoming.get("updated_at", "") > cur["updated_at"]:
-            s.updated += 1
-            action = "изменение"
-        elif incoming.get("updated_at", "") < cur["updated_at"]:
-            s.older += 1
+    summary = DiffSummary()
+    labels = {"new": "новая", "updated": "изменение", "deleted": "удаление"}
+    for event, action in store.preview_remote_events(payload["events"]):
+        setattr(summary, action, getattr(summary, action) + 1)
+        if action not in labels or len(summary.samples) >= 12:
             continue
-        else:
-            s.unchanged += 1
-            continue
-        if len(s.samples) < 12:
-            s.samples.append(f"{action}: {title}")
-    return s
+        incoming = event["payload"]
+        title = incoming.get("name") or incoming.get("title") or event["entity_id"][:8]
+        summary.samples.append(f"{labels[action]}: {title}")
+    return summary
 
 
 def apply_payload(store: Store, payload: dict) -> int:
@@ -116,7 +194,6 @@ def apply_payload(store: Store, payload: dict) -> int:
 
 
 def qr_png_base64(text: str) -> str:
-    # PNG без pillow/pypng:serious_python на Android их не собирает
     qr = qrcode.QRCode(border=4)
     qr.add_data(text)
     qr.make(fit=True)
@@ -125,7 +202,7 @@ def qr_png_base64(text: str) -> str:
     size = len(matrix) * scale
     raw = bytearray()
     for row in matrix:
-        line = b"".join(bytes([0 if v else 255]) * scale for v in row)
+        line = b"".join(bytes([0 if value else 255]) * scale for value in row)
         for _ in range(scale):
             raw += b"\x00" + line
 
@@ -151,21 +228,32 @@ border-radius:8px;text-decoration:none;margin:1em 0}p{color:#555}</style></head>
 <p>Затем в приложении Takt на этом устройстве:<br>
 Настройки → Перенос данных → Принять → «Из файла».</p>
 <p>Или скопируйте ссылку и вставьте её в поле «По ссылке» в приложении.</p>
+<p>Используйте эту ссылку только в доверенной локальной сети.</p>
 </body></html>"""
 
 
 class TransferServer:
-    """Временный HTTP-сервер в локальной сети: отдаёт payload по одноразовому
-    токену. QR ведёт на страницу /t/<token>, данные — /data.json?token=."""
+    """Временный LAN-сервер с одноразовым токеном и ограниченным временем жизни."""
 
     def __init__(self, store: Store, ttl_sec: float = 300.0, payload: dict | None = None):
-        self.payload_json = json.dumps(
-            payload if payload is not None else build_payload(store), ensure_ascii=False)
-        self.token = secrets.token_urlsafe(12)
+        body = payload if payload is not None else build_payload(store)
+        self.payload_json = json.dumps(body, ensure_ascii=False)
+        if len(self.payload_json.encode("utf-8")) > MAX_PAYLOAD_BYTES:
+            raise ValueError("Файл переноса превышает лимит размера")
+        self.token = secrets.token_urlsafe(16)
         self.received = threading.Event()
+        self._token_lock = threading.Lock()
+        self._consumed = False
+        self._stop_lock = threading.Lock()
+        self._stopped = False
+        self._thread: threading.Thread | None = None
         server = self
 
         class Handler(BaseHTTPRequestHandler):
+            def setup(self):
+                super().setup()
+                self.connection.settimeout(10.0)
+
             def log_message(self, *args):
                 pass
 
@@ -173,6 +261,9 @@ class TransferServer:
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Referrer-Policy", "no-referrer")
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -180,27 +271,48 @@ class TransferServer:
                 if self.path == f"/t/{server.token}":
                     self._send(200, _PAGE.replace("__TOKEN__", server.token).encode("utf-8"),
                                "text/html; charset=utf-8")
-                elif self.path == f"/data.json?token={server.token}":
+                elif self.path == f"/data.json?token={server.token}" and server._claim_token():
                     self._send(200, server.payload_json.encode("utf-8"),
                                "application/json; charset=utf-8")
                     server.received.set()
-                    t = threading.Timer(1.0, server.stop)
-                    t.daemon = True
-                    t.start()
+                    timer = threading.Timer(0.5, server.stop)
+                    timer.daemon = True
+                    timer.start()
                 else:
                     self._send(404, b"not found", "text/plain")
 
         self.httpd = ThreadingHTTPServer(("0.0.0.0", 0), Handler)
+        self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
-        self.url = f"http://{lan_ip()}:{self.port}/t/{self.token}"
-        self.data_url = f"http://{lan_ip()}:{self.port}/data.json?token={self.token}"
+        host = lan_ip()
+        self.url = f"http://{host}:{self.port}/t/{self.token}"
+        self.data_url = f"http://{host}:{self.port}/data.json?token={self.token}"
         self._ttl = threading.Timer(ttl_sec, self.stop)
         self._ttl.daemon = True
 
+    def _claim_token(self) -> bool:
+        with self._token_lock:
+            if self._consumed or self._stopped:
+                return False
+            self._consumed = True
+            return True
+
     def start(self) -> None:
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        if self._stopped:
+            raise RuntimeError("Сервер переноса уже остановлен")
+        self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True,
+                                        name="takt-transfer")
+        self._thread.start()
         self._ttl.start()
 
     def stop(self) -> None:
+        with self._stop_lock:
+            if self._stopped:
+                return
+            self._stopped = True
         self._ttl.cancel()
-        threading.Thread(target=self.httpd.shutdown, daemon=True).start()
+        if self._thread and self._thread.is_alive():
+            self.httpd.shutdown()
+        self.httpd.server_close()
+        if self._thread and self._thread is not threading.current_thread():
+            self._thread.join(timeout=5.0)

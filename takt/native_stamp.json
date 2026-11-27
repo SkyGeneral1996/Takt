@@ -1,1 +1,60 @@
-{"native": "875ca9a4abccff6183da36c444af4221e974b942a2eff0f65194a2ea0b2fbf33", "version": "0.4.0"}
+{
+  "dependencies": {
+    "cryptography": "50.0.2",
+    "flet": "1.1.3",
+    "pyjnius": null,
+    "qrcode": "8.2",
+    "requests": "2.34.2",
+    "tzdata": "2026.6",
+    "tzlocal": "5.4.5"
+  },
+  "flet": "1.1.3",
+  "native": "4e74a9d9ad2715766e42ecadd33bae48914ee441e11b3922ef8e8ad1b38e4720",
+  "platform": {
+    "machine": "AMD64",
+    "platform": "Windows-11-10.0.26300-SP0",
+    "release": "11",
+    "system": "Windows"
+  },
+  "python": {
+    "abi": "cp314-win_amd64",
+    "implementation": "CPython",
+    "version": "3.14.8"
+  },
+  "schema": 2,
+  "sources": {
+    "assets/icon.ico": "431f7b3e2ae96ae193c9a2a6670e70e9e1939880e966912a8f47ea2aa00ecad0",
+    "assets/icon.png": "c7d6d47628094e75a95f0d22d119010c4c0033fbba22525f454171d3adaea90a",
+    "build.py": "92af16f8725e895f7d4678a45d8da4e8e5b93202e22782ae1dae200046132304",
+    "installer.py": "95e78c9a8d0dd64dd9c0adaee19b0e5e2f2a2403d3420407729bc9938c28e2a8",
+    "main.py": "21a350dd02e26f92c312b72e7eaed6e0e4774db6f5e99fc2f3a679e885e3e8bc",
+    "pyproject.toml": "8f8dcb325a4f499fde14ccb79958788437f22b97d78e865938d60f4d39f094ea",
+    "requirements.txt": "fce9c98ec2089912989b3f801e6fcc737415fc06f48fdff388e268f8b9809b13",
+    "takt/__init__.py": "19e498881dc85769f1040285247b8bb452f2c62a5e16cd5ff3da7d1019b4d3ba",
+    "takt/core/__init__.py": "c3e83157252c41350962e67b6e8ba2b3669f53404b8c13ef394e82fe6f212460",
+    "takt/core/habits.py": "8f1c9c3c74bf793f63459cf5c1fa9c093f4d2b806564cc82988b5a2ee5c3c2bd",
+    "takt/core/lists.py": "850602a93a44fc84ab9af9239a18df1251159b814f07ef08ca01763fbd5bf434",
+    "takt/core/models.py": "6dd0910d006143c97e79e877549318820fe7c19b9ef9e4f11ef2029582a44429",
+    "takt/core/recurrence.py": "56a7997cff5d5d1d39849ff1628ecbbb1eb1a89ccae982fb1cc70e8d328b8ea8",
+    "takt/core/scheduler.py": "9525f45b193a2e159bb3eb527bfb08c8b2d484fa2e08ecf020983311f0673414",
+    "takt/core/store.py": "f4b3182c5cc289c02216ca966b43688918645bef6c7017f23a8cc923157c89bb",
+    "takt/sync/__init__.py": "e50350545c37878b06cebb5903cfddbac1754afe630dc5f5eb9f088d66d4c88d",
+    "takt/sync/base.py": "a344d4c989be2539fffa4494c0f815b4f6a7bcb549dd8d36aa0c29855342a070",
+    "takt/sync/engine.py": "ab38a35ed79011e76fa5546c41b63dc10fd2796cefef6bce9af5eefa074e1edd",
+    "takt/sync/yandex.py": "7cfcd3417c7d7c88ee9c611c031a94b68e7897c3a701d7e95b6bf4cd75e01af1",
+    "takt/transfer.py": "98297a946878080a265c2c076f536dbc8cb9f9726eb6713b256e8ce6c7d40aed",
+    "takt/ui/__init__.py": "a9f0a0ff6bdcccc1f2e022cf6799aa8bb93b30306b0ed12d6fcc2292aaeadabc",
+    "takt/ui/app.py": "4fccbc7c276e43406d4933007cef26d21d7b9b61952276845c0a3a88c161971f",
+    "takt/ui/calendar_view.py": "1476db2ec8b571e6707420f5ab8d91f4b2fd5faa11812bb8c1f718d4457d6820",
+    "takt/ui/dashboard_view.py": "7f68dc73cbb0160df173082b0a0d98f4694b687222614b36fe76ee29c9d45ddb",
+    "takt/ui/editor.py": "8cd9bed80e5a12717b6d9565d918401908cba80db26bc991c9c1528044553e90",
+    "takt/ui/habits_view.py": "6adaedb6d2859a99f889d352fe63cc83f6dbcaad6b21e55786b748615814d20e",
+    "takt/ui/helpers.py": "7952b2868da538541a932ea6560437bf65a1d304a75e3c3578bc7b3de834fbae",
+    "takt/ui/lists_view.py": "dee724781f230260bb4aacc557079c590b811053f6a8949fe302d491d37937ed",
+    "takt/ui/notes_view.py": "372cbdfcd918c3e73a77d8f20b20dff886e8db08c6f3e3ebddba3a651f221074",
+    "takt/ui/settings.py": "b0963a736aeacaa420f438ce4fba173578e048f1cee015105bbf782ff59f1563",
+    "takt/ui/stats_view.py": "9b9294f62996e788f205e85fcfe64d998a990944f2e46c65c740b534953a90fd",
+    "takt/update.py": "04931dcedf5c77e826120dd6ad597bc9cdd7cf2c27b274cbf3508e20d3b59115"
+  },
+  "version": "0.5.0"
+}

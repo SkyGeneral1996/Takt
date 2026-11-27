@@ -1,4 +1,6 @@
+import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -65,6 +67,67 @@ class TestSyncEngine(unittest.TestCase):
         self.ea.sync()
         self.eb.sync()
         self.assertEqual(self.eb.sync().applied, 0)
+
+    def test_concurrent_sync_uploads_latest_snapshot(self):
+        entered = threading.Event()
+        release = threading.Event()
+        uploads = []
+        original_upload = self.cloud.upload_text
+
+        def blocked_upload(path, text):
+            uploads.append(text)
+            if len(uploads) == 1:
+                entered.set()
+                release.wait(5)
+            original_upload(path, text)
+
+        self.cloud.upload_text = blocked_upload
+        self.sa.save_task(Task(title="Первая"))
+        first = SyncEngine(self.sa, self.cloud)
+        second = SyncEngine(self.sa, self.cloud)
+        results = []
+        thread1 = threading.Thread(target=lambda: results.append(first.sync()))
+        thread2 = threading.Thread(target=lambda: results.append(second.sync()))
+        thread1.start()
+        self.assertTrue(entered.wait(5))
+        latest = self.sa.save_task(Task(title="Вторая"))
+        thread2.start()
+        release.set()
+        thread1.join(10)
+        thread2.join(10)
+        self.assertFalse(thread1.is_alive())
+        self.assertFalse(thread2.is_alive())
+        remote = self.cloud.files["TaskSync/devices/devA.jsonl"]
+        self.assertIn(latest.id, remote)
+        self.assertEqual(SyncEngine(self.sa, self.cloud).sync().pushed, 0)
+
+    def test_corrupt_line_does_not_block_valid_events(self):
+        task = self.sa.save_task(Task(title="Валидная"))
+        valid = self.sa.local_events()[0]
+        self.cloud.files["TaskSync/devices/devC.jsonl"] = (
+            json.dumps(valid, ensure_ascii=False) + "\n{broken\n")
+        result = self.eb.sync()
+        self.assertEqual(result.applied, 1)
+        self.assertEqual(result.skipped, 1)
+        self.assertEqual(self.sb.get_task(task.id).title, "Валидная")
+
+    def test_unsafe_remote_filename_is_ignored(self):
+        self.cloud.files["TaskSync/devices/../escape.jsonl"] = "{}"
+        result = self.eb.sync()
+        self.assertEqual(result.applied, 0)
+        self.assertNotIn("TaskSync/escape.jsonl", self.cloud.files)
+
+    def test_compaction_keeps_latest_entity_and_completion_history(self):
+        task = self.sa.save_task(Task(title="До"))
+        self.sa.save_task(Task(id=task.id, title="После"))
+        self.sa.complete_task(task.id)
+        self.ea.sync()
+        events = self.sa.local_events()
+        task_events = [event for event in events if event["entity"] == "task"]
+        completion_events = [event for event in events if event["entity"] == "completion"]
+        self.assertEqual(len(task_events), 1)
+        self.assertEqual(task_events[0]["payload"]["title"], "После")
+        self.assertEqual(len(completion_events), 1)
 
 
 if __name__ == "__main__":

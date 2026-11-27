@@ -14,12 +14,16 @@ from takt.transfer import build_payload
 def texts(control):
     out = []
     value = getattr(control, "value", None)
+    if not isinstance(value, str):
+        value = getattr(control, "text", None)
     if isinstance(value, str):
         out.append(value)
     for child in getattr(control, "controls", []) or []:
         out.extend(texts(child))
     content = getattr(control, "content", None)
-    if content is not None:
+    if isinstance(content, str):
+        out.append(content)
+    elif content is not None:
         out.extend(texts(content))
     return out
 
@@ -35,7 +39,9 @@ class FakePage:
         self.navigation_bar = None
         self.controls = []
         self.services = []
+        self.dialogs = []
         self.width = 500
+        self.height = 800
         self.window = SimpleNamespace(icon=None)
 
     def add(self, *controls):
@@ -45,7 +51,11 @@ class FakePage:
         pass
 
     def show_dialog(self, dialog):
-        pass
+        self.dialogs.append(dialog)
+
+    def pop_dialog(self):
+        if self.dialogs:
+            self.dialogs.pop()
 
 
 class CoreSectionsTest(unittest.TestCase):
@@ -201,6 +211,94 @@ class ViewsSmokeTest(unittest.TestCase):
         self.app.page.width = 500
         self.app.show_section("tasks")
         self.assertIs(self.app.content.controls[0], self.app.mini_holder)
+
+    def test_resize_rerenders_responsive_content(self):
+        import flet as ft
+        self.app.page.width = 1200
+        self.app.show_section("tasks")
+        self.assertIsInstance(self.app.content.controls[0], ft.Row)
+        self.app.page.width = 500
+        self.app._on_resized(None)
+        self.assertIs(self.app.content.controls[0], self.app.mini_holder)
+        self.app.page.width = 1200
+        self.app._on_resized(None)
+        self.assertIsInstance(self.app.content.controls[0], ft.Row)
+
+    def test_notes_search_control_is_reused(self):
+        from takt.ui import notes_view
+        first = notes_view.build(self.app).controls[0]
+        self.app.notes_search = "заметк"
+        second = notes_view.build(self.app).controls[0]
+        self.assertIs(first, self.app.notes_search_f)
+        self.assertIs(second, first)
+        self.assertEqual(second.value, "заметк")
+
+    def test_mobile_week_calendar_scrolls(self):
+        import flet as ft
+        from takt.ui import calendar_view
+        self.app.page.width = 500
+        self.app.cal_week = True
+        column = calendar_view.build_full(self.app)
+        grid = column.controls[1]
+        self.assertIsInstance(grid, ft.Row)
+        self.assertEqual(grid.scroll, ft.ScrollMode.AUTO)
+        self.assertTrue(all(cell.width == 120 and not cell.expand
+                            for cell in grid.controls))
+
+    def test_settings_exposes_backup_and_categories(self):
+        from takt.ui.settings import open_settings
+        open_settings(self.app)
+        dialog = self.app.page.dialogs[-1]
+        labels = texts(dialog)
+        self.assertTrue(any("Резервная копия" in text for text in labels))
+        self.assertTrue(any("Скачать копию" in text for text in labels))
+        self.assertTrue(any("Категории" in text for text in labels))
+        self.assertEqual(dialog.content.height, 620)
+        self.assertTrue(dialog.content.content.expand)
+        self.assertEqual(len(self.app.page.services), 1)
+        dialog.actions[0].on_click(None)
+        self.assertEqual(self.app.page.services, [])
+
+    def test_category_manager_creates_category(self):
+        import flet as ft
+        from takt.ui.editor import open_category_manager
+        open_category_manager(self.app)
+        dialog = self.app.page.dialogs[-1]
+        form = dialog.content.content.controls[0]
+        form.controls[0].value = "Новая группа"
+        dialog.content.content.controls[1].controls[0].on_click(None)
+        self.assertEqual([c.name for c in self.store.list_categories()], ["Новая группа"])
+        self.assertIsInstance(dialog, ft.AlertDialog)
+
+    def test_task_delete_requires_confirmation(self):
+        from takt.ui.editor import open_task_editor
+        task = self.store.list_tasks()[0]
+        open_task_editor(self.app, task)
+        editor = self.app.page.dialogs[-1]
+        editor.actions[0].on_click(None)
+        confirmation = self.app.page.dialogs[-1]
+        self.assertIsNotNone(self.store.get_task(task.id))
+        confirmation.actions[1].on_click(None)
+        self.assertIsNone(self.store.get_task(task.id))
+
+    def test_subtask_can_be_renamed(self):
+        import flet as ft
+        from takt.ui.editor import open_task_editor
+        task = self.store.list_tasks()[0]
+        task.subtasks = [{"id": "sub1", "title": "Старое", "done": False}]
+        self.store.save_task(task)
+        open_task_editor(self.app, task)
+        editor = self.app.page.dialogs[-1]
+        self.assertEqual(editor.content.height, 620)
+        column = editor.content.content
+        subtasks = next(control for control in column.controls
+                        if isinstance(control, ft.Column) and control.controls
+                        and isinstance(control.controls[0], ft.Row))
+        title_f = subtasks.controls[0].controls[1]
+        title_f.value = "Новое"
+        title_f.on_change(SimpleNamespace(control=title_f))
+        editor.actions[-1].on_click(None)
+        self.assertEqual(self.store.get_task(task.id).subtasks[0]["title"], "Новое")
 
     def test_stats_summary(self):
         from takt.ui import stats_view

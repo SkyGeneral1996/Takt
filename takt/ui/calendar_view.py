@@ -126,6 +126,8 @@ def build_full(app) -> ft.Control:
     if not getattr(app, "cal_week", False):
         app.cal_week = False
     y, m = app.cal_ym
+    width = getattr(app.page, "width", None) or 0
+    compact_week = width < 700
     counts = day_counts(app)
     selected = app.day_filter or date.today().isoformat()
 
@@ -172,15 +174,18 @@ def build_full(app) -> ft.Control:
                 items.append(ft.Text(f"• {t.title}", size=11, no_wrap=True,
                                      overflow=ft.TextOverflow.ELLIPSIS))
             cols.append(ft.Container(
-                expand=True, padding=6, border_radius=8,
+                expand=not compact_week, width=120 if compact_week else None,
+                padding=6, border_radius=8,
                 bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.INDIGO)
                 if iso == selected else None,
                 content=ft.Column(items, spacing=3, tight=True),
                 on_click=lambda e, iso=iso: on_day(iso), ink=True))
-        grid = ft.Row(cols, spacing=4, vertical_alignment=ft.CrossAxisAlignment.START)
+        grid = ft.Row(cols, spacing=4,
+                      scroll=ft.ScrollMode.AUTO if compact_week else None,
+                      vertical_alignment=ft.CrossAxisAlignment.START)
         title = f"{monday.day} {MONTHS[monday.month - 1]} — неделя"
     else:
-        grid = _grid(app, y, m, counts, selected, False, on_day)
+        grid = _grid(app, y, m, counts, selected, width < 420, on_day)
         title = f"{MONTHS[m - 1]} {y}"
 
     day_tasks = [t for t in app.store.list_tasks()

@@ -66,6 +66,10 @@ class TaktApp:
             prefix_icon=ft.Icons.SEARCH, dense=True, expand=True,
             on_change=self.on_search, on_submit=self.on_search,
             on_blur=self.on_search)
+        self.notes_search_f = ft.TextField(
+            hint_text="Поиск по заметкам…", prefix_icon=ft.Icons.SEARCH,
+            dense=True, on_change=self.on_notes_search,
+            on_submit=self.on_notes_search)
         self.filter_row = ft.Row(spacing=4, wrap=True)
         self.cat_dd = ft.Dropdown(
             hint_text="Категория", dense=True, width=200,
@@ -95,7 +99,7 @@ class TaktApp:
         self.content = ft.Column(spacing=8, expand=True)
         self.root = ft.Container(content=self.content, expand=True)
         page.controls = [self.root]
-        page.on_resized = lambda e: (self._build_nav(), page.update())
+        page.on_resized = self._on_resized
         self.show_section("dashboard")
 
         self.scheduler = ReminderScheduler(store, self.on_reminder)
@@ -121,6 +125,10 @@ class TaktApp:
 
     def on_search(self, e):
         self.search = (e.control.value or "").lower().strip()
+        self.refresh()
+
+    def on_notes_search(self, e):
+        self.notes_search = (e.control.value or "").strip()
         self.refresh()
 
     def on_category_filter(self, e):
@@ -151,6 +159,11 @@ class TaktApp:
 
     def _on_nav(self, e):
         self.show_section(SECTIONS[e.control.selected_index][0])
+
+    def _on_resized(self, e):
+        self._build_nav()
+        self.render()
+        self.page.update()
 
     def _build_nav(self):
         idx = next(i for i, (k, _, _) in enumerate(SECTIONS) if k == self.section)
@@ -230,11 +243,23 @@ class TaktApp:
             engine = SyncEngine(self.store, provider,
                                 self.store.get_meta("sync_folder", "Takt"))
             result = engine.sync()
-            self.refresh()
-            if result.applied:
-                self.notify(f"Синхронизация: получено {result.applied} изменений")
         except Exception as ex:
-            self.notify(f"Ошибка синхронизации: {ex}")
+            message = f"Ошибка синхронизации: {ex}"
+            applied = 0
+            failed = True
+        else:
+            message = f"Синхронизация: получено {result.applied} изменений"
+            applied = result.applied
+            failed = False
+
+        async def publish():
+            self.refresh()
+            if failed or applied:
+                self.notify(message)
+        try:
+            self.page.run_task(publish)
+        except Exception:
+            pass
 
     # ---------- список ----------
 

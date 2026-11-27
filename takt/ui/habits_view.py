@@ -7,6 +7,7 @@ import flet as ft
 from ..core.habits import current_streak, week_checks
 from ..core.models import Habit
 from ..core.recurrence import WEEKDAY_LABELS
+from .helpers import confirm_action, dialog_width
 
 
 def build(app) -> ft.Control:
@@ -96,19 +97,22 @@ def open_habit_editor(app, habit: Habit | None = None) -> None:
         app.refresh()
 
     def delete(e):
-        app.store.delete_habit(habit.id)
-        page.pop_dialog()
-        app.refresh()
+        def apply_delete():
+            app.store.delete_habit(habit.id)
+            app.refresh()
+        confirm_action(app, f"Удалить привычку «{habit.name}»?", apply_delete,
+                       title="Удаление привычки", parent=dialog)
 
     actions = [ft.TextButton("Закрыть", on_click=lambda e: page.pop_dialog()),
                ft.FilledButton("Сохранить", on_click=save)]
     if editing:
         actions.insert(0, ft.TextButton("Удалить", on_click=delete))
 
-    page.show_dialog(ft.AlertDialog(
+    dialog = ft.AlertDialog(
         modal=True,
         title=ft.Text("Привычка" if editing else "Новая привычка"),
-        content=ft.Container(width=380, content=ft.Column(
+        content=ft.Container(width=dialog_width(page, 380), content=ft.Column(
             [name_f, freq_dd, wd_row], tight=True, spacing=10)),
         actions=actions,
-    ))
+    )
+    page.show_dialog(dialog)

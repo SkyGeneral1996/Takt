@@ -8,9 +8,11 @@ from ..core.models import (
 )
 from ..core.recurrence import (
     FREQ_NONE, FREQ_DAILY, FREQ_WEEKDAYS, FREQ_WEEKLY, FREQ_MONTHLY,
-    FREQ_LABELS, WEEKDAY_LABELS,
+    FREQ_LABELS, WEEKDAY_LABELS, local_timezone_name,
 )
-from .helpers import parse_user_datetime, to_user_input
+from .helpers import (
+    confirm_action, dialog_height, dialog_width, parse_user_datetime, to_user_input,
+)
 
 NEW_CATEGORY = "__new__"
 
@@ -82,7 +84,8 @@ def open_task_editor(app, task: Task | None = None) -> None:
             subtasks_col.controls.append(ft.Row([
                 ft.Checkbox(value=st["done"],
                             on_change=lambda e, s=st: s.update(done=e.control.value)),
-                ft.Text(st["title"], expand=True),
+                ft.TextField(value=st["title"], dense=True, expand=True,
+                             on_change=lambda e, s=st: s.update(title=e.control.value or "")),
                 ft.IconButton(ft.Icons.CLOSE, icon_size=16,
                               on_click=lambda e, s=st: remove_subtask(s)),
             ], spacing=4))
@@ -136,12 +139,24 @@ def open_task_editor(app, task: Task | None = None) -> None:
         freq = freq_dd.value
         if freq and freq != FREQ_NONE:
             try:
-                interval = max(1, int(interval_f.value or 1))
+                interval = int(interval_f.value or 1)
             except ValueError:
-                interval = 1
+                error_t.value = "Интервал должен быть целым числом"
+                page.update()
+                return
+            if interval < 1:
+                error_t.value = "Интервал должен быть не меньше 1"
+                page.update()
+                return
+            weekdays = [i for i, checkbox in enumerate(weekday_checks) if checkbox.value]
+            if freq == FREQ_WEEKLY and not weekdays:
+                error_t.value = "Выберите хотя бы один день недели"
+                page.update()
+                return
             task.recurrence = Recurrence(
-                freq=freq, interval=interval,
-                weekdays=[i for i, c in enumerate(weekday_checks) if c.value],
+                freq=freq, interval=interval, weekdays=weekdays,
+                anchor_day=rec.anchor_day if rec else None,
+                timezone=rec.timezone if rec and rec.timezone else local_timezone_name(),
             ).to_dict()
         else:
             task.recurrence = None
@@ -152,10 +167,12 @@ def open_task_editor(app, task: Task | None = None) -> None:
         app.notify("Задача сохранена")
 
     def delete(e):
-        store.delete_task(task.id)
-        page.pop_dialog()
-        app.refresh()
-        app.notify("Задача удалена")
+        def apply_delete():
+            store.delete_task(task.id)
+            app.refresh()
+            app.notify("Задача удалена")
+        confirm_action(app, f"Удалить задачу «{task.title}»?", apply_delete,
+                       title="Удаление задачи", parent=dialog)
 
     actions = [
         ft.TextButton("Отмена", on_click=lambda e: page.pop_dialog()),
@@ -169,7 +186,8 @@ def open_task_editor(app, task: Task | None = None) -> None:
         modal=True,
         title=ft.Text("Редактирование задачи" if editing else "Новая задача"),
         content=ft.Container(
-            width=440,
+            width=dialog_width(page, 440),
+            height=dialog_height(page, 620),
             content=ft.Column([
                 title_f, notes_f,
                 ft.Row([cat_dd, prio_dd], spacing=8),
@@ -182,8 +200,108 @@ def open_task_editor(app, task: Task | None = None) -> None:
                 subtasks_col,
                 ft.Row([new_sub_f, ft.IconButton(ft.Icons.ADD, on_click=add_subtask)]),
                 error_t,
-            ], scroll=ft.ScrollMode.AUTO, tight=True, spacing=10),
+            ], scroll=ft.ScrollMode.AUTO, tight=True, spacing=10, expand=True),
         ),
         actions=actions,
+    )
+    page.show_dialog(dialog)
+
+
+def open_category_manager(app) -> None:
+    page = app.page
+    store = app.store
+    selected: Category | None = None
+    name_f = ft.TextField(label="Название категории", dense=True)
+    colors = ["#2196F3", "#4CAF50", "#FF9800", "#E91E63", "#9C27B0", "#607D8B"]
+    color_dd = ft.Dropdown(
+        label="Цвет", dense=True, value=colors[0],
+        options=[ft.DropdownOption(key=color, text=color) for color in colors])
+    rows_col = ft.Column(spacing=4, tight=True, scroll=ft.ScrollMode.AUTO, expand=True)
+    error_t = ft.Text("", size=12, color=ft.Colors.RED)
+    delete_btn = ft.OutlinedButton("Удалить", icon=ft.Icons.DELETE, disabled=True)
+
+    def clear_editor():
+        nonlocal selected
+        selected = None
+        name_f.value = ""
+        color_dd.value = colors[0]
+        error_t.value = ""
+        delete_btn.disabled = True
+
+    def rebuild():
+        rows = []
+        for category in store.list_categories():
+            rows.append(ft.Row([
+                ft.Container(width=14, height=14, border_radius=7,
+                             bgcolor=category.color),
+                ft.Text(category.name, expand=True),
+                ft.IconButton(ft.Icons.EDIT, icon_size=16, tooltip="Изменить",
+                              on_click=lambda e, item=category: edit(item)),
+            ], spacing=6))
+        rows_col.controls = rows or [ft.Text("Нет категорий", color=ft.Colors.GREY,
+                                             size=12)]
+        page.update()
+
+    def edit(category: Category):
+        nonlocal selected
+        selected = category
+        name_f.value = category.name
+        color_dd.value = category.color
+        error_t.value = ""
+        delete_btn.disabled = False
+        page.update()
+
+    def save(e):
+        name = (name_f.value or "").strip()
+        if not name:
+            error_t.value = "Введите название категории"
+            page.update()
+            return
+        if any(c.id != (selected.id if selected else None)
+               and c.name.casefold() == name.casefold()
+               for c in store.list_categories()):
+            error_t.value = "Такая категория уже существует"
+            page.update()
+            return
+        category = selected or Category()
+        category.name = name
+        category.color = color_dd.value or colors[0]
+        category.touch()
+        store.save_category(category)
+        clear_editor()
+        rebuild()
+        app.refresh()
+
+    def delete(e):
+        category = selected
+        if category is None:
+            return
+
+        def apply_delete():
+            store.delete_category(category.id)
+            clear_editor()
+            rebuild()
+            app.refresh()
+            app.notify("Категория удалена; задачи сохранены")
+        confirm_action(app, f"Удалить категорию «{category.name}»? Задачи останутся.",
+                       apply_delete, title="Удаление категории", parent=dialog)
+
+    delete_btn.on_click = delete
+    rebuild()
+    dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Text("Категории"),
+        content=ft.Container(width=dialog_width(page, 420),
+                             height=dialog_height(page, 480), content=ft.Column([
+            ft.Row([name_f, color_dd], spacing=8, wrap=True),
+            ft.Row([
+                ft.FilledButton("Сохранить", icon=ft.Icons.SAVE, on_click=save),
+                delete_btn,
+            ], spacing=8),
+            error_t,
+            ft.Divider(height=8),
+            rows_col,
+        ], tight=True, spacing=8, expand=True)),
+        actions=[ft.TextButton("Закрыть", on_click=lambda e: page.pop_dialog())],
     )
     page.show_dialog(dialog)

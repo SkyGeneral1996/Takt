@@ -1,26 +1,50 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import flet as ft
 
 from .. import __version__
 from ..sync import YandexDiskProvider, SyncEngine
+from .editor import open_category_manager
+from .helpers import dialog_height, dialog_width
 from ..transfer import (
     TransferServer, qr_png_base64, fetch_payload, load_payload_file,
-    diff_payload, apply_payload,
+    build_payload, save_payload_file, diff_payload, apply_payload,
 )
 from ..update import (
-    check_update, choose_asset, download_asset, launch_update, UpdateError, is_frozen,
-    is_android, android_assets, zip_native_stamp, native_stamp,
-    apply_code_update, restart_android, install_apk_android, android_restart_mode,
+    check_update, choose_asset, download_asset, launch_update, UpdateError,
+    UpdateCancelled, is_frozen, is_android, android_assets, zip_native_stamp,
+    native_stamp, apply_code_update, restart_android, install_apk_android,
+    android_restart_mode,
 )
 
 DEFAULT_REPO = "SkyGeneral1996/Takt"
+ANDROID_APK_NAME = "takt-update.apk"
+
+
+def _run_ui(page, callback):
+    """Выполняет изменение контролов в UI-потоке, включая вызовы из worker."""
+    async def apply():
+        callback()
+    return page.run_task(apply)
+
+
+def _dismiss_dialog(page, dialog) -> None:
+    """Закрывает только свой диалог, не затрагивая более новый dialog stack."""
+    if getattr(dialog, "open", True):
+        dialog.open = False
+        page.update()
+
+
+async def _destroy_window(page) -> None:
+    await page.window.destroy()
 
 
 def open_settings(app) -> None:
@@ -76,13 +100,21 @@ def open_settings(app) -> None:
                 provider = YandexDiskProvider(token)
                 engine = SyncEngine(store, provider, store.get_meta("sync_folder", "Takt"))
                 result = engine.sync()
-                sync_status.value = (f"Готово: отправлено {result.pushed}, "
-                                     f"получено {result.applied} изменений")
-                last_t.value = f"Последняя синхронизация: {result.at}"
-                app.refresh()
             except Exception as ex:
-                sync_status.value = f"Ошибка: {ex}"
-            page.update()
+                message = f"Ошибка: {ex}"
+                last_value = None
+            else:
+                message = (f"Готово: отправлено {result.pushed}, "
+                           f"получено {result.applied} изменений")
+                last_value = f"Последняя синхронизация: {result.at}"
+
+            def publish():
+                sync_status.value = message
+                if last_value:
+                    last_t.value = last_value
+                app.refresh()
+                page.update()
+            _run_ui(page, publish)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -96,31 +128,90 @@ def open_settings(app) -> None:
         upd_status.value = "Проверка обновлений…"
         page.update()
 
+        def publish_result(message: str, info=None):
+            def apply():
+                upd_status.value = message
+                page.update()
+                if info is not None:
+                    _show_update_dialog(app, info)
+            _run_ui(page, apply)
+
         def worker():
             try:
                 info = check_update(repo)
                 if info is None:
-                    upd_status.value = f"Установлена последняя версия ({__version__})"
-                    page.update()
+                    publish_result(f"Установлена последняя версия ({__version__})")
                 else:
-                    page.update()
-                    _show_update_dialog(app, info)
-            except UpdateError as ex:
-                upd_status.value = str(ex)
-                page.update()
+                    publish_result("Найдено обновление", info)
             except Exception as ex:
-                upd_status.value = f"Ошибка: {ex}"
-                page.update()
+                publish_result(str(ex) if isinstance(ex, UpdateError) else f"Ошибка: {ex}")
 
         threading.Thread(target=worker, daemon=True).start()
+
+    backup_picker = ft.FilePicker()
+    page.services.append(backup_picker)
+    backup_status = ft.Text("", size=12)
+
+    def cleanup_picker():
+        if backup_picker in page.services:
+            page.services.remove(backup_picker)
+
+    def close_settings(e=None):
+        cleanup_picker()
+        page.pop_dialog()
+
+    def publish_backup(message: str):
+        def apply():
+            backup_status.value = message
+            page.update()
+        _run_ui(page, apply)
+
+    async def do_save_backup(e):
+        stamp = datetime.now().strftime("%Y-%m-%d-%H%M")
+        path = await backup_picker.save_file(
+            dialog_title="Сохранить резервную копию Takt",
+            file_name=f"takt-backup-{stamp}.json",
+            allowed_extensions=["json"])
+        if not path:
+            return
+        backup_status.value = "Создание резервной копии…"
+        page.update()
+
+        def worker():
+            try:
+                save_payload_file(path, build_payload(store))
+                publish_backup("Резервная копия сохранена")
+            except Exception as ex:
+                publish_backup(f"Ошибка: {ex}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    async def do_restore_backup(e):
+        files = await backup_picker.pick_files(
+            dialog_title="Выберите резервную копию Takt",
+            allowed_extensions=["json"])
+        if not files:
+            return
+        try:
+            payload = load_payload_file(files[0].path)
+        except Exception as ex:
+            backup_status.value = f"Ошибка: {ex}"
+            page.update()
+            return
+        close_settings()
+        _show_diff(app, payload, title="Восстановление резервной копии",
+                   apply_label="Восстановить")
 
     dialog = ft.AlertDialog(
         modal=True,
         title=ft.Text("Настройки"),
         content=ft.Container(
-            width=460,
+            width=dialog_width(page, 460),
+            height=dialog_height(page, 620),
             content=ft.Column([
                 mode_t, device_t, last_t,
+                ft.OutlinedButton("Категории", icon=ft.Icons.CATEGORY,
+                                  on_click=lambda e: open_category_manager(app)),
                 ft.Divider(),
                 ft.Text("Яндекс.Диск", weight=ft.FontWeight.BOLD),
                 token_f, folder_f, sync_status,
@@ -140,6 +231,18 @@ def open_settings(app) -> None:
                                       on_click=lambda e: open_receive(app)),
                 ], wrap=True, spacing=8),
                 ft.Divider(),
+                ft.Text("Резервная копия", weight=ft.FontWeight.BOLD),
+                ft.Text("Сохраняет задачи, списки, привычки, заметки и историю "
+                        "выполнений в JSON-файл. Восстановление объединяет данные "
+                        "и сохраняет более новые правки.", size=12, color=ft.Colors.GREY),
+                ft.Row([
+                    ft.OutlinedButton("Скачать копию", icon=ft.Icons.BACKUP,
+                                      on_click=do_save_backup),
+                    ft.OutlinedButton("Восстановить", icon=ft.Icons.RESTORE,
+                                      on_click=do_restore_backup),
+                ], wrap=True, spacing=8),
+                backup_status,
+                ft.Divider(),
                 ft.Text("Обновления", weight=ft.FontWeight.BOLD),
                 ft.Text(f"Версия: {__version__}", size=12, color=ft.Colors.GREY),
                 repo_f, auto_row, upd_status,
@@ -147,12 +250,13 @@ def open_settings(app) -> None:
                     ft.OutlinedButton("Проверить обновления", icon=ft.Icons.SYSTEM_UPDATE,
                                       on_click=do_check_updates),
                 ]),
-            ], scroll=ft.ScrollMode.AUTO, tight=True, spacing=10),
+            ], scroll=ft.ScrollMode.AUTO, tight=True, spacing=10, expand=True),
         ),
         actions=[
-            ft.TextButton("Закрыть", on_click=lambda e: page.pop_dialog()),
+            ft.TextButton("Закрыть", on_click=close_settings),
             ft.FilledButton("Сохранить", on_click=save_settings),
         ],
+        on_dismiss=lambda e: cleanup_picker(),
     )
     page.show_dialog(dialog)
 
@@ -189,7 +293,7 @@ def open_send(app, payload: dict | None = None, title: str = "Передать �
         modal=True,
         title=ft.Text(title),
         content=ft.Container(
-            width=340,
+            width=dialog_width(page, 340),
             content=ft.Column([
                 ft.Text("Отсканируйте QR камерой телефона (оба устройства в одной "
                         "Wi-Fi сети), скачайте файл и примите его в приложении: "
@@ -258,7 +362,7 @@ def open_receive(app) -> None:
         modal=True,
         title=ft.Text("Принять данные"),
         content=ft.Container(
-            width=420,
+            width=dialog_width(page, 420),
             content=ft.Column([
                 ft.Text("Данные с другого устройства: по ссылке из QR-кода "
                         "(устройства в одной сети) или из файла, скачанного "
@@ -278,7 +382,8 @@ def open_receive(app) -> None:
     page.show_dialog(dialog)
 
 
-def _show_diff(app, payload: dict) -> None:
+def _show_diff(app, payload: dict, *, title: str = "Разница данных",
+               apply_label: str = "Применить") -> None:
     page = app.page
     d = diff_payload(app.store, payload)
     samples = ft.Column(
@@ -296,60 +401,101 @@ def _show_diff(app, payload: dict) -> None:
 
     dialog = ft.AlertDialog(
         modal=True,
-        title=ft.Text("Разница данных"),
+        title=ft.Text(title),
         content=ft.Container(
-            width=420,
+            width=dialog_width(page, 420),
+            height=dialog_height(page, 480),
             content=ft.Column([
                 ft.Text(d.describe(), weight=ft.FontWeight.BOLD),
                 samples, note,
-            ], tight=True, spacing=8, scroll=ft.ScrollMode.AUTO),
+            ], tight=True, spacing=8, scroll=ft.ScrollMode.AUTO, expand=True),
         ),
         actions=[
             ft.TextButton("Отмена", on_click=lambda e: page.pop_dialog()),
-            ft.FilledButton("Применить", on_click=apply),
+            ft.FilledButton(apply_label, on_click=apply),
         ],
     )
     page.show_dialog(dialog)
 
 
-def _update_android(info, status_t, page) -> None:
+def _update_android(info, status_t, page, cancel_event, publish, tmp: Path) -> None:
     code, apk = android_assets(info.assets)
-    tmp = Path(tempfile.mkdtemp(prefix="takt-update-"))
+    last_progress = 0.0
+
+    def say(text: str):
+        def apply():
+            status_t.value = text
+            page.update()
+        publish(apply)
+
+    def ensure_active():
+        if cancel_event.is_set():
+            raise UpdateCancelled("Загрузка отменена")
 
     def prog(frac):
-        status_t.value = f"Загрузка… {int(frac * 100)}%"
-        page.update()
+        nonlocal last_progress
+        fraction = min(max(float(frac), 0.0), 1.0)
+        if fraction <= last_progress:
+            return
+        last_progress = fraction
+
+        def apply():
+            status_t.value = f"Загрузка… {int(fraction * 100)}%"
+            page.update()
+        publish(apply)
 
     if code:
-        status_t.value = "Загрузка обновления…"
-        page.update()
-        dest = tmp / code["name"]
-        download_asset(code["url"], dest, prog)
+        say("Загрузка обновления…")
+        dest = tmp / "Takt-Code.zip"
+        download_asset(
+            code["url"], dest, prog, cancel_event,
+            expected_size=code["size"], expected_sha256=code["sha256"],
+        )
+        ensure_active()
         if zip_native_stamp(dest) == native_stamp():
-            status_t.value = "Установка обновления…"
-            page.update()
+            say("Установка обновления…")
+            ensure_active()
             apply_code_update(dest)
             mode = android_restart_mode()
             if mode == "notification":
-                status_t.value = "Обновление установлено ✓ Нажмите уведомление для перезапуска."
+                say("Обновление установлено ✓ Нажмите уведомление для перезапуска.")
             elif mode == "manual":
-                status_t.value = "Обновление установлено ✓ Закройте и откройте приложение снова."
+                say("Обновление установлено ✓ Закройте и откройте приложение снова.")
             else:
-                status_t.value = "Обновление установлено ✓ Перезапуск…"
-            page.update()
-            if mode == "manual":
-                time.sleep(2.5)
+                say("Обновление установлено ✓ Перезапуск…")
+            if mode == "manual" and cancel_event.wait(2.5):
+                raise UpdateCancelled("Загрузка отменена")
+            ensure_active()
             restart_android()
             return
+        if apk is None:
+            raise UpdateError("Нативная оболочка изменилась — нужен APK обновления")
+
     if apk:
-        status_t.value = "Загрузка APK (обновилась нативная часть)…"
-        page.update()
-        cache = Path(os.environ.get("FLET_APP_STORAGE_CACHE", str(tmp)))
-        dest = cache / apk["name"]
-        download_asset(apk["url"], dest, prog)
-        status_t.value = "Подтвердите установку в системном окне"
-        page.update()
-        install_apk_android(dest)
+        say("Загрузка APK (обновилась нативная часть)…")
+        cache = Path(os.environ.get("FLET_APP_STORAGE_CACHE", str(tmp / "apk-cache")))
+        cache.mkdir(parents=True, exist_ok=True)
+        # Фиксированное имя: имя из подписанного manifest не используется как путь.
+        dest = cache / ANDROID_APK_NAME
+        downloaded = False
+        try:
+            download_asset(
+                apk["url"], dest, prog, cancel_event,
+                expected_size=apk["size"], expected_sha256=apk["sha256"],
+            )
+            downloaded = True
+            ensure_active()
+            say("Подтвердите установку в системном окне")
+            ensure_active()
+            install_apk_android(dest)
+        except Exception:
+            # После успешного запуска системного установщика файл должен остаться.
+            if downloaded:
+                try:
+                    dest.unlink()
+                except FileNotFoundError:
+                    pass
+            raise
         return
     raise UpdateError("В релизе нет файлов для Android")
 
@@ -358,64 +504,110 @@ def _show_update_dialog(app, info) -> None:
     page = app.page
     progress = ft.ProgressRing(visible=False, width=20, height=20)
     status_t = ft.Text("", size=12, expand=True)
-    state = {"busy": False}
+    update_button = ft.FilledButton("Обновить", icon=ft.Icons.SYSTEM_UPDATE)
+    cancel_event = threading.Event()
+    state = {"busy": False, "closed": False, "progress": 0.0}
+
+    def publish(callback):
+        def apply():
+            if not state["closed"]:
+                callback()
+        _run_ui(page, apply)
+
+    def say(text: str):
+        def apply():
+            status_t.value = text
+            page.update()
+        publish(apply)
+
+    def cancel_update(e=None):
+        if state["closed"]:
+            return
+        state["closed"] = True
+        cancel_event.set()
+        _dismiss_dialog(page, dialog)
 
     def do_update(e):
-        if state["busy"]:
+        if state["busy"] or state["closed"] or cancel_event.is_set():
             return
         state["busy"] = True
+        state["progress"] = 0.0
         progress.visible = True
+        update_button.disabled = True
         page.update()
 
         def worker():
+            tmp = Path(tempfile.mkdtemp(prefix="takt-update-"))
             try:
+                if cancel_event.is_set():
+                    return
                 if is_android():
-                    _update_android(info, status_t, page)
+                    _update_android(info, status_t, page, cancel_event, publish, tmp)
                     return
                 asset = choose_asset(info.assets)
                 if not asset:
-                    status_t.value = "В релизе нет файлов для Windows (.exe / .zip)"
-                    page.update()
-                    return
-                status_t.value = f"Загрузка {asset['name']}…"
-                page.update()
-                dest = Path(tempfile.mkdtemp(prefix="takt-update-")) / asset["name"]
+                    raise UpdateError("В релизе нет файлов для Windows (.exe)")
+                say(f"Загрузка {asset['name']}…")
+                dest = tmp / asset["name"]
 
                 def prog(frac):
-                    status_t.value = f"Загрузка {asset['name']}… {int(frac * 100)}%"
-                    page.update()
+                    def apply():
+                        state["progress"] = max(state["progress"], min(max(float(frac), 0.0), 1.0))
+                        status_t.value = (f"Загрузка {asset['name']}… "
+                                          f"{int(state['progress'] * 100)}%")
+                        page.update()
+                    publish(apply)
 
-                download_asset(asset["url"], dest, prog)
-                status_t.value = "Запуск обновления…"
-                page.update()
-                launch_update(dest)
+                download_asset(
+                    asset["url"], dest, prog, cancel_event,
+                    expected_size=asset["size"], expected_sha256=asset["sha256"],
+                )
+                if cancel_event.is_set():
+                    return
+                say("Запуск обновления…")
+                if cancel_event.is_set():
+                    return
+                launch_update(dest, kind=asset["kind"])
                 if is_frozen():
-                    page.run_task(page.window.destroy)
+                    page.run_task(_destroy_window, page)
                 else:
-                    status_t.value = "Обновление запущено (dev-режим: приложение не закрывается)"
-                    page.update()
+                    say("Обновление запущено (dev-режим: приложение не закрывается)")
             except Exception as ex:
-                status_t.value = f"Ошибка обновления: {ex}"
-                state["busy"] = False
-                progress.visible = False
-                page.update()
+                if cancel_event.is_set():
+                    return
+                message = f"Ошибка обновления: {ex}"
+
+                def failed():
+                    if state["closed"]:
+                        return
+                    status_t.value = message
+                    state["busy"] = False
+                    progress.visible = False
+                    update_button.disabled = False
+                    page.update()
+                _run_ui(page, failed)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
 
         threading.Thread(target=worker, daemon=True).start()
 
+    update_button.on_click = do_update
     dialog = ft.AlertDialog(
         modal=True,
         title=ft.Text(f"Доступно обновление {info.version}"),
         content=ft.Container(
-            width=420,
+            width=dialog_width(page, 420),
+            height=dialog_height(page, 460),
             content=ft.Column([
                 ft.Text(info.notes or "Описание релиза отсутствует.", size=12),
                 ft.Row([progress, status_t]),
-            ], tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+            ], tight=True, spacing=10, scroll=ft.ScrollMode.AUTO, expand=True),
         ),
         actions=[
-            ft.TextButton("Позже", on_click=lambda e: page.pop_dialog()),
-            ft.FilledButton("Обновить", icon=ft.Icons.SYSTEM_UPDATE, on_click=do_update),
+            ft.TextButton("Позже", on_click=cancel_update),
+            update_button,
         ],
+        on_dismiss=cancel_update,
     )
     page.show_dialog(dialog)
 
@@ -429,7 +621,7 @@ def check_updates_silent(app) -> None:
         try:
             info = check_update(repo)
             if info:
-                _show_update_dialog(app, info)
+                _run_ui(app.page, lambda: _show_update_dialog(app, info))
         except Exception:
             pass
 

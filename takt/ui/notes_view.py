@@ -3,20 +3,20 @@ from __future__ import annotations
 import flet as ft
 
 from ..core.models import Note
+from .helpers import confirm_action, dialog_height, dialog_width
 
 
 def build(app) -> ft.Control:
-    query = getattr(app, "notes_search", "") or ""
+    query = (getattr(app, "notes_search", "") or "").strip()
     notes = app.store.list_notes()
     if query:
+        needle = query.lower()
         notes = [n for n in notes
-                 if query in " ".join([n.title, n.text, " ".join(n.tags)]).lower()]
+                 if needle in " ".join([n.title, n.text, " ".join(n.tags)]).lower()]
 
-    search_f = ft.TextField(hint_text="Поиск по заметкам…", prefix_icon=ft.Icons.SEARCH,
-                            dense=True, value=query,
-                            on_change=lambda e: _set_search(app, e.control.value),
-                            on_submit=lambda e: _set_search(app, e.control.value),
-                            on_blur=lambda e: _set_search(app, e.control.value))
+    search_f = app.notes_search_f
+    if search_f.value != query:
+        search_f.value = query
     cards: list[ft.Control] = [search_f]
     if not notes:
         cards.append(ft.Text("Нет заметок. Нажмите +, чтобы создать.",
@@ -44,11 +44,6 @@ def build(app) -> ft.Control:
             on_click=lambda e, note=n: open_note_editor(app, note), ink=True,
         )))
     return ft.Column(cards, spacing=6, scroll=ft.ScrollMode.AUTO, expand=True)
-
-
-def _set_search(app, value: str) -> None:
-    app.notes_search = (value or "").lower().strip()
-    app.refresh()
 
 
 def _toggle_pin(app, note: Note) -> None:
@@ -81,20 +76,24 @@ def open_note_editor(app, note: Note | None = None) -> None:
         app.refresh()
 
     def delete(e):
-        app.store.delete_note(note.id)
-        page.pop_dialog()
-        app.refresh()
+        def apply_delete():
+            app.store.delete_note(note.id)
+            app.refresh()
+        confirm_action(app, f"Удалить заметку «{note.title or 'Без названия'}»?",
+                       apply_delete, title="Удаление заметки", parent=dialog)
 
     actions = [ft.TextButton("Закрыть", on_click=lambda e: page.pop_dialog()),
                ft.FilledButton("Сохранить", on_click=save)]
     if editing:
         actions.insert(0, ft.TextButton("Удалить", on_click=delete))
 
-    page.show_dialog(ft.AlertDialog(
+    dialog = ft.AlertDialog(
         modal=True,
         title=ft.Text("Заметка" if editing else "Новая заметка"),
-        content=ft.Container(width=440, content=ft.Column(
+        content=ft.Container(width=dialog_width(page, 440),
+                             height=dialog_height(page, 520), content=ft.Column(
             [title_f, text_f, tags_f, pin_cb], tight=True, spacing=10,
-            scroll=ft.ScrollMode.AUTO)),
+            scroll=ft.ScrollMode.AUTO, expand=True)),
         actions=actions,
-    ))
+    )
+    page.show_dialog(dialog)

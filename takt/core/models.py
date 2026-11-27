@@ -26,6 +26,7 @@ def parse_iso(value: str) -> datetime:
 
 PRIORITY_LOW, PRIORITY_MEDIUM, PRIORITY_HIGH = 0, 1, 2
 PRIORITY_NAMES = {PRIORITY_LOW: "Низкий", PRIORITY_MEDIUM: "Средний", PRIORITY_HIGH: "Высокий"}
+SCHEMA_VERSION = 1
 
 
 @dataclass
@@ -34,14 +35,20 @@ class Recurrence:
     freq: str
     interval: int = 1
     weekdays: list[int] = field(default_factory=list)  # 0 = понедельник
+    anchor_day: int | None = None
+    timezone: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Recurrence":
+        anchor = d.get("anchor_day")
+        timezone_name = d.get("timezone")
         return cls(freq=d["freq"], interval=int(d.get("interval", 1)),
-                   weekdays=list(d.get("weekdays", [])))
+                   weekdays=list(d.get("weekdays", [])),
+                   anchor_day=None if anchor is None else int(anchor),
+                   timezone=timezone_name if isinstance(timezone_name, str) else None)
 
 
 @dataclass
@@ -62,10 +69,12 @@ class Task:
     deleted: bool = False
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {**asdict(self), "_schema_version": SCHEMA_VERSION}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Task":
+        if int(d.get("_schema_version", SCHEMA_VERSION)) > SCHEMA_VERSION:
+            raise ValueError("Файл создан более новой версией Takt")
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -83,10 +92,12 @@ class Category:
     deleted: bool = False
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {**asdict(self), "_schema_version": SCHEMA_VERSION}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Category":
+        if int(d.get("_schema_version", SCHEMA_VERSION)) > SCHEMA_VERSION:
+            raise ValueError("Файл создан более новой версией Takt")
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -114,10 +125,12 @@ class CheckList:
     deleted: bool = False
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {**asdict(self), "_schema_version": SCHEMA_VERSION}
 
     @classmethod
     def from_dict(cls, d: dict) -> "CheckList":
+        if int(d.get("_schema_version", SCHEMA_VERSION)) > SCHEMA_VERSION:
+            raise ValueError("Файл создан более новой версией Takt")
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -130,7 +143,9 @@ class CheckList:
 
     @property
     def total(self) -> float:
-        return sum((i.get("qty") or 1) * (i.get("price") or 0) for i in self.items)
+        return sum((1 if i.get("qty") is None else i["qty"])
+                   * (0 if i.get("price") is None else i["price"])
+                   for i in self.items)
 
 
 @dataclass
@@ -146,10 +161,12 @@ class Habit:
     deleted: bool = False
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {**asdict(self), "_schema_version": SCHEMA_VERSION}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Habit":
+        if int(d.get("_schema_version", SCHEMA_VERSION)) > SCHEMA_VERSION:
+            raise ValueError("Файл создан более новой версией Takt")
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -172,10 +189,12 @@ class Note:
     deleted: bool = False
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {**asdict(self), "_schema_version": SCHEMA_VERSION}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Note":
+        if int(d.get("_schema_version", SCHEMA_VERSION)) > SCHEMA_VERSION:
+            raise ValueError("Файл создан более новой версией Takt")
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 

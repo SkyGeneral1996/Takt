@@ -23,12 +23,12 @@ def current_streak(habit: Habit, today: date) -> int:
 
 
 def week_checks(habit: Habit, today: date) -> list[bool | None]:
-    """Пн..Вс текущей недели: True — отмечено, False — пропущено, None — не запланировано."""
+    """Пн..Вс: True — отмечено, False — пропущено, None — не запланировано/будущее."""
     monday = today - timedelta(days=today.weekday())
     out = []
     for i in range(7):
         d = monday + timedelta(days=i)
-        if not habit.scheduled_on(d.weekday()):
+        if d > today or not habit.scheduled_on(d.weekday()):
             out.append(None)
         else:
             out.append(bool(habit.checks.get(d.isoformat())))

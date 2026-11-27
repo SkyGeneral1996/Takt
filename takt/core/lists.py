@@ -44,4 +44,6 @@ def sorted_items(items: list[dict]) -> list[dict]:
 
 
 def item_sum(item: dict) -> float:
-    return (item.get("qty") or 1) * (item.get("price") or 0)
+    qty = 1 if item.get("qty") is None else item["qty"]
+    price = 0 if item.get("price") is None else item["price"]
+    return qty * price
